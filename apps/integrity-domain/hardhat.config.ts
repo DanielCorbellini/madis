@@ -1,5 +1,6 @@
 import hardhatToolboxMochaEthersPlugin from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
 import { configVariable, defineConfig } from "hardhat/config";
+import { buildAndExportTask } from "./tasks/export-abis.js";
 
 export default defineConfig({
   plugins: [hardhatToolboxMochaEthersPlugin],
@@ -35,4 +36,5 @@ export default defineConfig({
       accounts: [configVariable("SEPOLIA_PRIVATE_KEY")],
     },
   },
+  tasks: [buildAndExportTask],
 });
