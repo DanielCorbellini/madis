@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
+      POSTGRES_DB: ${POSTGRES_DB:-records}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-records}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  anchor-service:
+    build:
+      context: .
+      dockerfile: apps/anchor-service/Dockerfile
+    container_name: anchor_service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
+      RPC_URL: ${RPC_URL:-http://host.docker.internal:8545}
+      ANCHOR_CRON_SCHEDULE: ${ANCHOR_CRON_SCHEDULE:-0 */3 * * *}
+      ANCHOR_PRIVATE_KEY: ${ANCHOR_PRIVATE_KEY:-}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+
+  monitor-service:
+    build:
+      context: .
+      dockerfile: apps/monitor-service/Dockerfile
+    container_name: monitor_service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
+      RPC_URL: ${RPC_URL:-http://host.docker.internal:8545}
+      MONITOR_CRON_SCHEDULE: ${MONITOR_CRON_SCHEDULE:-*/5 * * * *}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}

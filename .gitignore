@@ -1,8 +1,15 @@
 # IDE
 .vscode/
 
-# Node Modules
+# Node Modules & Build
 node_modules/
+dist/
+.pnpm-store/
 
-# Documentation
+# Environment Variables
+.env
+.env.example
+
+# Documentation & TODOs
 docs/
+TODO.md
