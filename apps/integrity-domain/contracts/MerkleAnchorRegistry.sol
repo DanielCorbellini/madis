@@ -13,6 +13,7 @@ contract MerkleAnchorRegistry is Ownable {
     error ZeroRoot();
     error RootAlreadyExists(bytes32 root);
     error RootDoesNotExist(bytes32 root);
+    error ZeroBatchSize();
     error IndexOutOfBounds(uint256 index, uint256 total);
     error NoRootsStored();
 
@@ -22,7 +23,6 @@ contract MerkleAnchorRegistry is Ownable {
     event RootAdded(
         uint256 indexed index,
         bytes32 indexed root,
-        address indexed sender,
         uint256 batchSize
     );
 
@@ -37,15 +37,18 @@ contract MerkleAnchorRegistry is Ownable {
     function addMerkleRoot(
         bytes32 _root,
         uint256 _batchSize
-    ) external onlyOwner returns (uint256 index) {
+    ) external onlyOwner returns (uint256) {
         if (_root == bytes32(0)) revert ZeroRoot();
+        if (_batchSize == 0) revert ZeroBatchSize();
         if (rootToIndexPlusOne[_root] != 0) revert RootAlreadyExists(_root);
 
-        index = merkleRoots.length;
+        uint256 index = merkleRoots.length;
         merkleRoots.push(_root);
         rootToIndexPlusOne[_root] = index + 1;
 
-        emit RootAdded(index, _root, msg.sender, _batchSize);
+        emit RootAdded(index, _root, _batchSize);
+
+        return index;
     }
 
     /**
@@ -89,6 +92,30 @@ contract MerkleAnchorRegistry is Ownable {
      */
     function getRootCount() external view returns (uint256) {
         return merkleRoots.length;
+    }
+
+    /**
+     * @dev Returns a paginated slice of anchored Merkle Roots.
+     * Returns an empty array if offset is out of bounds or if no roots are stored.
+     */
+    function getMerkleRootsPaged(
+        uint256 _offset,
+        uint256 _limit
+    ) external view returns (bytes32[] memory) {
+        uint256 total = merkleRoots.length;
+        if (total == 0 || _offset >= total) {
+            return new bytes32[](0);
+        }
+
+        uint256 remaining = total - _offset;
+        uint256 size = _limit < remaining ? _limit : remaining;
+        bytes32[] memory result = new bytes32[](size);
+
+        for (uint256 i = 0; i < size; i++) {
+            result[i] = merkleRoots[_offset + i];
+        }
+
+        return result;
     }
 
     /**
