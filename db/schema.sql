@@ -101,7 +101,6 @@ CREATE TABLE "anchor_records" (
     "record_id"     BIGINT          NOT NULL,
     "batch_id"      BIGINT          NOT NULL,
     "merkle_proof"  JSONB           NOT NULL,
-    "leaf_index"    INTEGER         NOT NULL,
     "anchored_at"   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
