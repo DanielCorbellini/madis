@@ -13,3 +13,6 @@ dist/
 # Documentation & TODOs
 docs/
 TODO.md
+
+# Contracts ABI
+packages/contracts-shared/src/abi
