@@ -1,12 +1,11 @@
 import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
-import { keccak256, AbiCoder, isHexString } from "ethers";
+import { AbiCoder, isHexString, keccak256 } from "ethers";
 import type { MerkleTreeBuildResult } from "./types.js";
 
 const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 
 /**
  * Computes the double-hash for a given leaf value
- *
  */
 export function getLeafHash(leaf: string): string {
   if (!isHexString(leaf, 32)) {
@@ -21,8 +20,9 @@ export function getLeafHash(leaf: string): string {
  * Builds a Merkle tree from an array of 32-byte leaves
  */
 export function buildMerkleTree(leaves: string[]): MerkleTreeBuildResult {
-  if (!Array.isArray(leaves) || leaves.length === 0)
+  if (!Array.isArray(leaves) || leaves.length === 0) {
     throw new Error("Cannot build Merkle tree from empty leaves array");
+  }
 
   for (let i = 0; i < leaves.length; i++) {
     if (!isHexString(leaves[i], 32)) {
@@ -47,7 +47,6 @@ export function buildMerkleTree(leaves: string[]): MerkleTreeBuildResult {
 
 /**
  * Verifies off-chain whether a leaf belongs to a Merkle tree with the specified root and proof.
- *
  */
 export function verifyMerkleProof(
   root: string,

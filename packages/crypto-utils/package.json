@@ -12,7 +12,8 @@
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
   },
   "dependencies": {
     "@openzeppelin/merkle-tree": "^1.0.8",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "chai": "^6.2.2",
     "typescript": "^5.7.2"
   }
 }
