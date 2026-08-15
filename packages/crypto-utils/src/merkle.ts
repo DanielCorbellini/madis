@@ -1,6 +1,6 @@
 import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
 import { AbiCoder, isHexString, keccak256 } from "ethers";
-import type { MerkleTreeBuildResult } from "./types.js";
+import type { MerkleTreeBuildResult } from "./types.ts";
 
 const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 

@@ -1,5 +1,5 @@
 import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
-import { canonicalize } from "./canonicalizer.js";
+import { canonicalize } from "./canonicalizer.ts";
 
 const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 

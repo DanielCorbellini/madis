@@ -1,6 +1,6 @@
 import { getAddress, isAddress, verifyMessage } from "ethers";
-import { canonicalize } from "./canonicalizer.js";
-import type { RecordPayload } from "./types.js";
+import { canonicalize } from "./canonicalizer.ts";
+import type { RecordPayload } from "./types.ts";
 
 /**
  * Recovers the Ethereum address that signed the canonical representation of data.

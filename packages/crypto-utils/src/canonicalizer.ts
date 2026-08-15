@@ -13,7 +13,10 @@ export function canonicalize(obj: unknown): string {
   }
 
   const record = obj as Record<string, unknown>;
-  const sortedKeys = Object.keys(record).sort();
+  const sortedKeys = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort();
+
   const entries = sortedKeys.map(
     (key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`,
   );

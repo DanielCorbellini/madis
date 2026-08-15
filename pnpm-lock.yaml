@@ -361,6 +361,9 @@ importers:
         specifier: ^6.17.0
         version: 6.17.0
     devDependencies:
+      '@types/chai':
+        specifier: ^5.2.3
+        version: 5.2.3
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
