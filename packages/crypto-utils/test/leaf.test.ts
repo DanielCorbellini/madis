@@ -1,8 +1,8 @@
-import { describe, it } from "node:test";
 import { expect } from "chai";
-import { hashPayloadData, computeLeafHash } from "../src/leaf.ts";
-import { AbiCoder, keccak256, toUtf8Bytes } from "ethers";
+import { AbiCoder, isHexString, keccak256, toUtf8Bytes } from "ethers";
+import { describe, it } from "node:test";
 import { canonicalize } from "../src/canonicalizer.ts";
+import { computeLeafHash, hashPayloadData } from "../src/leaf.ts";
 
 const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 
@@ -22,7 +22,7 @@ describe("leaf", () => {
     const computedHash = hashPayloadData(payload);
 
     expect(computedHash).to.equal(expectedHash);
-    expect(computedHash).to.match(/^0x[a-fA-F0-9]{64}$/);
+    expect(isHexString(computedHash, 32)).to.be.true;
   });
 
   it("should compute the leaf hash Li using EVM ABI encoding correctly", () => {
@@ -45,7 +45,7 @@ describe("leaf", () => {
     const computedLeafHash = computeLeafHash(id, data, signature);
 
     expect(computedLeafHash).to.equal(expectedLeafHash);
-    expect(computedLeafHash).to.match(/^0x[a-fA-F0-9]{64}$/);
+    expect(isHexString(computedLeafHash, 32)).to.be.true;
   });
 
   it("should generate deterministic leaf hash regardless of data key order", () => {
