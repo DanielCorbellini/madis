@@ -16,12 +16,3 @@ export interface MerkleTreeBuildResult {
   leaves: string[];
   proofs: string[][];
 }
-
-/**
- * Parameters for mathematical validation of a Merkle proof.
- */
-export interface MerkleProofValidation {
-  root: string;
-  proof: string[];
-  leaf: string;
-}

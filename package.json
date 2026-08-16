@@ -5,8 +5,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "pnpm -r --stream --if-present test",
-    "test:parallel": "pnpm -r --parallel --stream --if-present test"
+    "test": "pnpm -r --stream --no-bail --if-present test",
+    "test:parallel": "pnpm -r --parallel --stream --no-bail --if-present test"
   },
   "keywords": [],
   "author": "",

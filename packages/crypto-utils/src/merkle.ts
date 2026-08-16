@@ -46,7 +46,7 @@ export function buildMerkleTree(leaves: string[]): MerkleTreeBuildResult {
 }
 
 /**
- * Verifies off-chain whether a leaf belongs to a Merkle tree with the specified root and proof.
+ * Verifies off-chain whether a leaf belongs to a Merkle tree with the specified root and proof (sibling hashes).
  */
 export function verifyMerkleProof(
   root: string,
