@@ -12,6 +12,8 @@
 CREATE TABLE "records" (
     "id"              BIGSERIAL       NOT NULL,
     "entity_id"       BIGINT          NOT NULL,
+    "record_type"     VARCHAR(20)     NOT NULL,
+    "payload"         JSONB           NOT NULL,
     "version"         INTEGER         NOT NULL DEFAULT 1,
     "is_deleted"      BOOLEAN         NOT NULL DEFAULT FALSE,
     "replaces"        BIGINT          NULL,
@@ -41,14 +43,21 @@ ALTER TABLE "records"
         CHECK ("replaces" IS NOT NULL OR "version" = 1);
 
 ALTER TABLE "records"
-    ADD CONSTRAINT "records_entity_version_unique"
-        UNIQUE ("entity_id", "version");
+    ADD CONSTRAINT "records_record_type_check"
+        CHECK ("record_type" IN ('prescription', 'emr_encounter'));
+
+ALTER TABLE "records"
+    ADD CONSTRAINT "records_type_entity_version_unique"
+        UNIQUE ("record_type", "entity_id", "version");
 
 CREATE INDEX "idx_records_replaces"
     ON "records" ("replaces");
 
 CREATE INDEX "idx_records_created_at"
     ON "records" ("created_at");
+
+CREATE INDEX "idx_records_record_type"
+    ON "records" ("record_type");
 
 -- -----------------------------------------------------------------------------
 -- 2. batches — Anchoring lifecycle
