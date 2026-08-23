@@ -1,0 +1,31 @@
+{
+  "name": "data-domain",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "crypto-utils": "workspace:*",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.17.0",
+    "fastify": "^5.12.1",
+    "fastify-type-provider-zod": "^7.0.0",
+    "pg": "^8.13.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/chai": "^5.2.3",
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "chai": "^6.2.2",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
