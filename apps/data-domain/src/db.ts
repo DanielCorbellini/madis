@@ -1,6 +1,9 @@
 import { Pool, type PoolConfig } from "pg";
 
-export function createDbPool(connectionString: string, options: Partial<PoolConfig> = {}): Pool {
+export function createDbPool(
+  connectionString: string,
+  options: Partial<PoolConfig> = {},
+): Pool {
   return new Pool({ connectionString, ...options });
 }
 
