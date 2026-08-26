@@ -16,3 +16,6 @@ TODO.md
 
 # Contracts ABI
 packages/contracts-shared/src/abi
+
+# Docker local overrides
+docker-compose.override.yml

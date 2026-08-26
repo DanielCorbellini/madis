@@ -1,13 +1,20 @@
-import Fastify from "fastify";
+import { buildApp } from "./app.ts";
+import { createEnvWhitelistChecker } from "./auth/whitelist.ts";
 import { loadConfig } from "./config.ts";
 import { checkDatabaseConnection, createDbPool } from "./db.ts";
+import { createPostgresRecordRepository } from "./domain/records/record-repository.ts";
 
 async function main() {
   const config = loadConfig();
   const pool = createDbPool(config.databaseUrl);
   await checkDatabaseConnection(pool);
 
-  const app = Fastify({ logger: true });
+  const repository = createPostgresRecordRepository(pool);
+  const isClientAuthorized = createEnvWhitelistChecker(
+    config.whitelistedAddresses,
+  );
+
+  const app = buildApp({ repository, isClientAuthorized });
 
   app.get("/health", async () => {
     await checkDatabaseConnection(pool);
