@@ -16,6 +16,8 @@ import {
   createRecordBodySchema,
   deleteRecordBodySchema,
   entityIdParamsSchema,
+  recordListQuerySchema,
+  recordListResponseSchema,
   recordResponseSchema,
   updateRecordBodySchema,
 } from "./record-schemas.ts";
@@ -121,6 +123,28 @@ export async function recordRoutes(
       });
 
       reply.status(201).send(record);
+    },
+  );
+
+  server.get(
+    "/",
+    {
+      schema: {
+        querystring: recordListQuerySchema,
+        response: { 200: recordListResponseSchema },
+      },
+    },
+    async (request) => {
+      const { after, limit } = request.query;
+      const rows = await repository.listLatest(recordType, { after, limit });
+
+      const hasMore = rows.length > limit;
+      const data = hasMore ? rows.slice(0, limit) : rows;
+      const nextCursor = hasMore
+        ? (data[data.length - 1]?.entityId ?? null)
+        : null;
+
+      return { data, nextCursor };
     },
   );
 

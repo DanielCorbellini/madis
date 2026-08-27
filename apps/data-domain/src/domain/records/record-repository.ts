@@ -22,6 +22,11 @@ export interface AppendVersionInput {
   isDeleted: boolean;
 }
 
+export interface ListLatestOptions {
+  after?: number;
+  limit: number;
+}
+
 export interface RecordRepository {
   createEntity(input: CreateEntityInput): Promise<RecordRow>;
   appendVersion(input: AppendVersionInput): Promise<RecordRow>;
@@ -30,6 +35,10 @@ export interface RecordRepository {
     entityId: number,
   ): Promise<RecordRow | null>;
   findHistory(recordType: RecordType, entityId: number): Promise<RecordRow[]>;
+  listLatest(
+    recordType: RecordType,
+    options: ListLatestOptions,
+  ): Promise<RecordRow[]>;
 }
 
 export class VersionConflictDbError extends Error {}
@@ -150,6 +159,22 @@ export function createPostgresRecordRepository(
          WHERE record_type = $1 AND entity_id = $2
          ORDER BY version ASC`,
         [recordType, entityId],
+      );
+      return (result.rows as RecordRowDb[]).map(toRecordRow);
+    },
+
+    async listLatest(recordType, { after, limit }) {
+      const result = await db.query(
+        `SELECT * FROM (
+           SELECT DISTINCT ON (entity_id) ${SELECT_COLUMNS}
+           FROM records
+           WHERE record_type = $1
+           ORDER BY entity_id, version DESC
+         ) latest
+         WHERE NOT "isDeleted" AND "entityId" > $2
+         ORDER BY "entityId" ASC
+         LIMIT $3`,
+        [recordType, after ?? 0, limit + 1],
       );
       return (result.rows as RecordRowDb[]).map(toRecordRow);
     },
