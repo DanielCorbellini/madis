@@ -104,10 +104,33 @@ export function createPostgresRecordRepository(
   return {
     async createEntity(input) {
       const result = await db.query(
-        `WITH next_id AS (SELECT nextval('records_id_seq') AS id)
-         INSERT INTO records (id, entity_id, record_type, payload, version, client_address, signature)
-         SELECT id, id, $1, $2, 1, $3, $4 FROM next_id
-         RETURNING ${SELECT_COLUMNS}`,
+        `
+          WITH
+              next_id AS (
+                  SELECT
+                      nextval ('records_id_seq') AS id
+              )
+          INSERT INTO
+              records (
+                  id,
+                  entity_id,
+                  record_type,
+                  payload,
+                  version,
+                  client_address,
+                  signature
+              )
+          SELECT
+              id,
+              id,
+              $1,
+              $2,
+              1,
+              $3,
+              $4
+          FROM
+              next_id RETURNING ${SELECT_COLUMNS}
+        `,
         [input.recordType, input.data, input.clientAddress, input.signature],
       );
       return toRecordRow(result.rows[0] as RecordRowDb);
@@ -116,10 +139,21 @@ export function createPostgresRecordRepository(
     async appendVersion(input) {
       try {
         const result = await db.query(
-          `INSERT INTO records
-             (entity_id, record_type, payload, version, replaces, is_deleted, client_address, signature)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           RETURNING ${SELECT_COLUMNS}`,
+          `
+            INSERT INTO
+                records (
+                    entity_id,
+                    record_type,
+                    payload,
+                    version,
+                    replaces,
+                    is_deleted,
+                    client_address,
+                    signature
+                )
+            VALUES
+                ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${SELECT_COLUMNS}
+          `,
           [
             input.entityId,
             input.recordType,
@@ -144,9 +178,19 @@ export function createPostgresRecordRepository(
 
     async findLatest(recordType, entityId) {
       const result = await db.query(
-        `SELECT ${SELECT_COLUMNS} FROM records
-         WHERE record_type = $1 AND entity_id = $2
-         ORDER BY version DESC LIMIT 1`,
+        `
+          SELECT
+              ${SELECT_COLUMNS}
+          FROM
+              records
+          WHERE
+              record_type = $1
+              AND entity_id = $2
+          ORDER BY
+              version DESC
+          LIMIT
+              1
+        `,
         [recordType, entityId],
       );
       const row = result.rows[0] as RecordRowDb | undefined;
@@ -155,9 +199,17 @@ export function createPostgresRecordRepository(
 
     async findHistory(recordType, entityId) {
       const result = await db.query(
-        `SELECT ${SELECT_COLUMNS} FROM records
-         WHERE record_type = $1 AND entity_id = $2
-         ORDER BY version ASC`,
+        `
+          SELECT 
+              ${SELECT_COLUMNS}
+          FROM
+              records
+          WHERE
+              record_type = $1 
+              AND entity_id = $2
+          ORDER BY
+              version ASC
+        `,
         [recordType, entityId],
       );
       return (result.rows as RecordRowDb[]).map(toRecordRow);
@@ -165,15 +217,29 @@ export function createPostgresRecordRepository(
 
     async listLatest(recordType, { after, limit }) {
       const result = await db.query(
-        `SELECT * FROM (
-           SELECT DISTINCT ON (entity_id) ${SELECT_COLUMNS}
-           FROM records
-           WHERE record_type = $1
-           ORDER BY entity_id, version DESC
-         ) latest
-         WHERE NOT "isDeleted" AND "entityId" > $2
-         ORDER BY "entityId" ASC
-         LIMIT $3`,
+        `
+          SELECT
+              *
+          FROM
+              (
+                  SELECT DISTINCT
+                      ON (entity_id) ${SELECT_COLUMNS}
+                  FROM
+                      records
+                  WHERE
+                      record_type = $1
+                  ORDER BY
+                      entity_id,
+                      version DESC
+              ) latest
+          WHERE
+              NOT "isDeleted"
+              AND "entityId" > $2
+          ORDER BY
+              "entityId" ASC
+          LIMIT
+              $3
+        `,
         [recordType, after ?? 0, limit + 1],
       );
       return (result.rows as RecordRowDb[]).map(toRecordRow);
