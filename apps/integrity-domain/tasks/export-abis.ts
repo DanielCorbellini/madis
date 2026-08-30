@@ -1,27 +1,45 @@
+import { overrideTask } from "hardhat/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { overrideTask } from "hardhat/config";
 
 /**
- * Extends the default build task to automatically export ABI to shared package
+ * Extends the default build task to automatically export the compiled contract
+ * artifacts to `packages/contracts-shared`
  */
 export const buildAndExportTask = overrideTask("build")
   .setInlineAction(async (args, hre, runSuper) => {
     const result = await runSuper(args);
 
-    const outDir = path.resolve(
+    const sharedSrcDir = path.resolve(
       hre.config.paths.root,
-      "../../packages/contracts-shared/src/abi",
+      "../../packages/contracts-shared/src",
     );
-    await fs.mkdir(outDir, { recursive: true });
+
+    // 1. Raw ABIs
+    const abiDir = path.join(sharedSrcDir, "abi");
+    await fs.mkdir(abiDir, { recursive: true });
 
     const fqNames = await hre.artifacts.getAllFullyQualifiedNames();
 
     for (const fqName of fqNames) {
       const artifact = await hre.artifacts.readArtifact(fqName);
-      const filePath = path.join(outDir, `${artifact.contractName}.json`);
+      const filePath = path.join(abiDir, `${artifact.contractName}.json`);
       await fs.writeFile(filePath, JSON.stringify(artifact.abi, null, 2));
     }
+
+    // 2. Generated TypeChain bindings
+    const typechainSrcDir = path.join(
+      hre.config.paths.root,
+      "types",
+      "ethers-contracts",
+    );
+    const typechainDestDir = path.join(sharedSrcDir, "generated");
+
+    await fs.rm(typechainDestDir, { recursive: true, force: true });
+    await fs.cp(typechainSrcDir, typechainDestDir, {
+      recursive: true,
+      filter: (source) => path.basename(source) !== "hardhat.d.ts",
+    });
 
     return result;
   })

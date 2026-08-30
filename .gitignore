@@ -14,8 +14,9 @@ dist/
 docs/
 TODO.md
 
-# Contracts ABI
+# Contracts ABI + generated TypeChain bindings
 packages/contracts-shared/src/abi
+packages/contracts-shared/src/generated
 
 # Docker local overrides
 docker-compose.override.yml
