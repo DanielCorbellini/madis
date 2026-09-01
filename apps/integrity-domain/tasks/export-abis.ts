@@ -1,6 +1,7 @@
 import { overrideTask } from "hardhat/config";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeDeploymentsFile } from "./export-deployments.js";
 
 /**
  * Extends the default build task to automatically export the compiled contract
@@ -40,6 +41,9 @@ export const buildAndExportTask = overrideTask("build")
       recursive: true,
       filter: (source) => path.basename(source) !== "hardhat.d.ts",
     });
+
+    // 3. Deployment address registry (from Ignition artifacts)
+    await writeDeploymentsFile(hre.config.paths.root);
 
     return result;
   })

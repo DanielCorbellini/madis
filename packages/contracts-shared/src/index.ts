@@ -1,6 +1,7 @@
 import type { ContractRunner } from "ethers";
 import { MerkleAnchorRegistry__factory } from "./generated/index.js";
 
+export * from "./deployments.js";
 export * from "./generated/index.js";
 
 export function getMerkleAnchorRegistry(

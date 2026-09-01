@@ -16,6 +16,8 @@
 # Typechain output
 /types
 
+/ignition/deployments/chain-31337
+
 # Environment files
 .env
 .env.*

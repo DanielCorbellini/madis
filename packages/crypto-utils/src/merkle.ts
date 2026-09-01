@@ -24,19 +24,15 @@ export function buildMerkleTree(leaves: string[]): MerkleTreeBuildResult {
     throw new Error("Cannot build Merkle tree from empty leaves array");
   }
 
-  for (let i = 0; i < leaves.length; i++) {
-    if (!isHexString(leaves[i], 32)) {
-      throw new Error(`Invalid 32-byte hex leaf at index ${i}: ${leaves[i]}`);
+  const values = leaves.map((leaf, i) => {
+    if (!isHexString(leaf, 32)) {
+      throw new Error(`Invalid 32-byte hex leaf at index ${i}: ${leaf}`);
     }
-  }
+    return [leaf];
+  });
 
-  const values = leaves.map((leaf) => [leaf]);
   const tree = StandardMerkleTree.of(values, ["bytes32"]);
-  const proofs: string[][] = [];
-
-  for (let i = 0; i < leaves.length; i++) {
-    proofs.push(tree.getProof(i));
-  }
+  const proofs: string[][] = leaves.map((_, i) => tree.getProof(i));
 
   return {
     root: tree.root,

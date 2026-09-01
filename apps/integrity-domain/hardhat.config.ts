@@ -1,6 +1,7 @@
 import hardhatToolboxMochaEthersPlugin from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
 import { configVariable, defineConfig } from "hardhat/config";
 import { buildAndExportTask } from "./tasks/export-abis.js";
+import { exportDeploymentsTask } from "./tasks/export-deployments.js";
 
 export default defineConfig({
   plugins: [hardhatToolboxMochaEthersPlugin],
@@ -42,5 +43,5 @@ export default defineConfig({
       accounts: [configVariable("POLYGON_AMOY_PRIVATE_KEY")],
     },
   },
-  tasks: [buildAndExportTask],
+  tasks: [buildAndExportTask, exportDeploymentsTask],
 });
