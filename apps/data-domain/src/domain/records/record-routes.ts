@@ -103,29 +103,6 @@ export async function recordRoutes(
     }
   }
 
-  server.post(
-    "/",
-    {
-      schema: {
-        body: createRecordBodySchema,
-        response: { 201: recordResponseSchema },
-      },
-    },
-    async (request, reply) => {
-      const { data, clientAddress, signature } = request.body;
-      await assertAuthorizedAndSigned({ data, clientAddress, signature });
-
-      const record = await repository.createEntity({
-        recordType,
-        data,
-        clientAddress,
-        signature,
-      });
-
-      reply.status(201).send(record);
-    },
-  );
-
   server.get(
     "/",
     {
@@ -185,6 +162,29 @@ export async function recordRoutes(
         throw new RecordNotFoundError();
       }
       return history;
+    },
+  );
+
+  server.post(
+    "/",
+    {
+      schema: {
+        body: createRecordBodySchema,
+        response: { 201: recordResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const { data, clientAddress, signature } = request.body;
+      await assertAuthorizedAndSigned({ data, clientAddress, signature });
+
+      const record = await repository.createEntity({
+        recordType,
+        data,
+        clientAddress,
+        signature,
+      });
+
+      reply.status(201).send(record);
     },
   );
 

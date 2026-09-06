@@ -41,6 +41,19 @@ export interface RecordRepository {
   ): Promise<RecordRow[]>;
 }
 
+interface RecordRowDb {
+  id: string;
+  entityId: string;
+  recordType: RecordType;
+  data: Record<string, unknown>;
+  version: number;
+  isDeleted: boolean;
+  replaces: string | null;
+  clientAddress: string;
+  signature: string;
+  createdAt: Date | string;
+}
+
 export class VersionConflictDbError extends Error {}
 
 const UNIQUE_VIOLATION = "23505";
@@ -57,19 +70,6 @@ const SELECT_COLUMNS = `
   signature, 
   created_at AS "createdAt"
 `;
-
-interface RecordRowDb {
-  id: string;
-  entityId: string;
-  recordType: RecordType;
-  data: Record<string, unknown>;
-  version: number;
-  isDeleted: boolean;
-  replaces: string | null;
-  clientAddress: string;
-  signature: string;
-  createdAt: Date | string;
-}
 
 // node-postgres returns BIGINT columns (records.id, entity_id, replaces) as
 // strings to avoid precision loss, so every row from the DB needs this
