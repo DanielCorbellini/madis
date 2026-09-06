@@ -1,12 +1,15 @@
 import {
+  checkDatabaseConnection,
+  createDbPool,
+  createLogger,
+} from "service-runtime";
+import {
   assertContractDeployed,
   assertNetworkMatches,
   assertWalletIsOwner,
   createChainClient,
 } from "./chain.ts";
 import { loadConfig } from "./config.ts";
-import { checkDatabaseConnection, createDbPool } from "./db.ts";
-import { createLogger } from "./logger.ts";
 
 export async function main() {
   const config = loadConfig();

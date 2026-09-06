@@ -91,7 +91,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
   }
 
   const contractAddress = resolveContractAddress(chainId, env.CONTRACT_ADDRESS);
-
   const anchorPrivateKey = required(env, "ANCHOR_PRIVATE_KEY");
 
   if (!PRIVATE_KEY_PATTERN.test(anchorPrivateKey)) {
