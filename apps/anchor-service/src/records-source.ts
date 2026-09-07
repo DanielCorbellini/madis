@@ -1,19 +1,10 @@
 import type { Pool } from "pg";
-import QueryStream from "pg-query-stream";
-
-export interface UnanchoredRecord {
-  id: number;
-  payload: Record<string, unknown>;
-  signature: string;
-  clientAddress: string;
-}
-
-interface UnanchoredRow {
-  id: string;
-  payload: Record<string, unknown>;
-  signature: string;
-  client_address: string;
-}
+import { streamRows } from "service-runtime";
+import {
+  type AnchorableRecord,
+  type RecordRow,
+  toAnchorableRecord,
+} from "./record.ts";
 
 const UNANCHORED_QUERY = `
   SELECT
@@ -37,28 +28,19 @@ const UNANCHORED_QUERY = `
 `;
 
 /**
- * Streams unanchored records in ascending ID order, yielding one record at a time
+ * Streams unanchored records in ascending ID order, yielding one at a time
  * to avoid loading the entire result set into memory.
  */
 export async function* streamUnanchoredRecords(
   pool: Pool,
   batchSize = 10_000,
-): AsyncGenerator<UnanchoredRecord> {
-  const client = await pool.connect();
-  try {
-    const stream = client.query(
-      new QueryStream(UNANCHORED_QUERY, [], { batchSize }),
-    );
-
-    for await (const row of stream as AsyncIterable<UnanchoredRow>) {
-      yield {
-        id: Number(row.id),
-        payload: row.payload,
-        signature: row.signature,
-        clientAddress: row.client_address,
-      };
-    }
-  } finally {
-    client.release();
+): AsyncGenerator<AnchorableRecord> {
+  for await (const row of streamRows<RecordRow>(
+    pool,
+    UNANCHORED_QUERY,
+    [],
+    batchSize,
+  )) {
+    yield toAnchorableRecord(row);
   }
 }

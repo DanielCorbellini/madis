@@ -2,8 +2,12 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Pool } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
-import QueryStream from "pg-query-stream";
-import type { Queryable } from "service-runtime";
+import { type Queryable, streamRows } from "service-runtime";
+import {
+  type AnchorableRecord,
+  type RecordRow,
+  toAnchorableRecord,
+} from "./record.ts";
 
 export type BatchStatus = "pending" | "submitted" | "confirmed" | "failed";
 
@@ -23,13 +27,6 @@ export interface AnchorEntry {
   proof: string[];
 }
 
-export interface BatchRecord {
-  id: number;
-  payload: Record<string, unknown>;
-  signature: string;
-  clientAddress: string;
-}
-
 interface BatchRowDb {
   id: string;
   status: BatchStatus;
@@ -39,26 +36,6 @@ interface BatchRowDb {
   block_number: string | null;
   retry_count: number;
   error_message: string | null;
-}
-
-interface BatchRecordRowDb {
-  id: string;
-  payload: Record<string, unknown>;
-  signature: string;
-  client_address: string;
-}
-
-function toBatch(row: BatchRowDb): Batch {
-  return {
-    id: Number(row.id),
-    status: row.status,
-    merkleRoot: row.merkle_root,
-    size: row.size,
-    transactionHash: row.transaction_hash,
-    blockNumber: row.block_number === null ? null : Number(row.block_number),
-    retryCount: row.retry_count,
-    errorMessage: row.error_message,
-  };
 }
 
 /**
@@ -193,51 +170,48 @@ export async function findInFlightBatches(db: Queryable): Promise<Batch[]> {
     [],
   );
 
-  return (rows as BatchRowDb[]).map(toBatch);
+  return (rows as BatchRowDb[]).map((row) => ({
+    id: Number(row.id),
+    status: row.status,
+    merkleRoot: row.merkle_root,
+    size: row.size,
+    transactionHash: row.transaction_hash,
+    blockNumber: row.block_number === null ? null : Number(row.block_number),
+    retryCount: row.retry_count,
+    errorMessage: row.error_message,
+  }));
 }
+
+const BATCH_RECORDS_QUERY = `
+  SELECT
+      r.id,
+      r.payload,
+      r.signature,
+      r.client_address
+  FROM
+      anchor_records ar
+      JOIN records r ON r.id = ar.record_id
+  WHERE
+      ar.batch_id = $1
+  ORDER BY
+      r.id ASC
+`;
 
 /**
  * Streams a batch's pinned records (for rebuilding its tree during a `failed`
  * retry). Cursor-based — a failed batch can be large.
  */
-// candidate for a shared streamRows helper (see records-source.ts)
 export async function* streamBatchRecords(
   pool: Pool,
   batchId: number,
   batchSize = 10_000,
-): AsyncGenerator<BatchRecord> {
-  const client = await pool.connect();
-  try {
-    const stream = client.query(
-      new QueryStream(
-        `
-          SELECT
-              r.id,
-              r.payload,
-              r.signature,
-              r.client_address
-          FROM
-              anchor_records ar
-              JOIN records r ON r.id = ar.record_id
-          WHERE
-              ar.batch_id = $1
-          ORDER BY
-              r.id ASC
-        `,
-        [batchId],
-        { batchSize },
-      ),
-    );
-
-    for await (const row of stream as AsyncIterable<BatchRecordRowDb>) {
-      yield {
-        id: Number(row.id),
-        payload: row.payload,
-        signature: row.signature,
-        clientAddress: row.client_address,
-      };
-    }
-  } finally {
-    client.release();
+): AsyncGenerator<AnchorableRecord> {
+  for await (const row of streamRows<RecordRow>(
+    pool,
+    BATCH_RECORDS_QUERY,
+    [batchId],
+    batchSize,
+  )) {
+    yield toAnchorableRecord(row);
   }
 }

@@ -3,13 +3,7 @@ import {
   isWhitelistedAddress,
   verifyClientSignature,
 } from "crypto-utils";
-
-export interface RecordForValidation {
-  id: number;
-  payload: Record<string, unknown>;
-  signature: string;
-  clientAddress: string;
-}
+import type { AnchorableRecord } from "./record.ts";
 
 export type ValidationResult =
   | { recordId: number; ok: true; leaf: string }
@@ -23,7 +17,7 @@ export type ValidationResult =
  * On success returns the Merkle leaf
  */
 export function validateRecord(
-  record: RecordForValidation,
+  record: AnchorableRecord,
   whitelist: string[],
 ): ValidationResult {
   const signatureValid = verifyClientSignature({

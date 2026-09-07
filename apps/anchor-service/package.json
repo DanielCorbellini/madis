@@ -19,7 +19,6 @@
     "p-retry": "^6.2.1",
     "pg": "^8.13.1",
     "pg-copy-streams": "^6.0.6",
-    "pg-query-stream": "^4.7.1",
     "service-runtime": "workspace:*",
     "tsx": "^4.19.2"
   },
