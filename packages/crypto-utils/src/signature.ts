@@ -15,6 +15,7 @@ export function recoverSignerAddress(
 
 /**
  * Verifies whether the signature matches the clientAddress in the payload.
+ * Checks if the address that signed the payload does not match the clientAddress, or if any of the required fields are missing, it returns false.
  */
 export function verifyClientSignature(payload: RecordPayload): boolean {
   try {
@@ -22,8 +23,12 @@ export function verifyClientSignature(payload: RecordPayload): boolean {
       return false;
     }
 
-    const recovered = recoverSignerAddress(payload.data, payload.signature);
-    return getAddress(recovered) === getAddress(payload.clientAddress);
+    const recoveredAddress = recoverSignerAddress(
+      payload.data,
+      payload.signature,
+    );
+
+    return getAddress(recoveredAddress) === getAddress(payload.clientAddress);
   } catch {
     return false;
   }
