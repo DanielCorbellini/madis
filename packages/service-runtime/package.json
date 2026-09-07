@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "pg": "^8.13.1",
+    "pg-query-stream": "^4.7.1",
     "pino": "^9.6.0"
   },
   "devDependencies": {
