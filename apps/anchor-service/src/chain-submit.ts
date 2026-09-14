@@ -1,4 +1,10 @@
+import type { ContractTransactionResponse } from "ethers";
 import { isError, parseUnits } from "ethers";
+import pRetry, { AbortError } from "p-retry";
+
+/** The only field this module reads off a sent transaction — mirrors the
+ * real ethers type instead of hand-rolling it, so it can't drift. */
+export type TransactionLike = Pick<ContractTransactionResponse, "hash">;
 
 /**
  * Computes bumped gas fees by applying the multiplier to the provided fee data and capping them at maxFeeGwei.
@@ -36,4 +42,110 @@ export function decodeRevertName(error: unknown): string | null {
   }
 
   return null;
+}
+
+export class PoisonBatchError extends Error {
+  revertName: string;
+  constructor(revertName: string) {
+    super(`contract call reverted with ${revertName} — not retryable`);
+    this.name = "PoisonBatchError";
+    this.revertName = revertName;
+  }
+}
+
+class AlreadyOnChainSignal extends Error {}
+
+export type SubmitResult =
+  | { status: "sent"; tx: TransactionLike }
+  | { status: "already-on-chain" };
+
+export interface SubmitRootOptions {
+  retries: number;
+  maxFeeGwei: number;
+}
+
+/**
+ * Sends `addMerkleRoot(root, size)`, retrying failures (network,
+ * timeout, RPC unreachable/rate-limited).
+ *
+ * In the first call, the gas fee is not bumped. Every retry, regardless
+ * of what caused the previous attempt to fail, carries a fee bump, escalating
+ * from the second attempt onward and capped at `maxFeeGwei`.
+ *
+ * A decoded contract revert is deterministic: retrying with the same
+ * root/size would fail identically, so those abort immediately instead of
+ * retrying. `RootAlreadyExists` resolves as success, `OwnableUnauthorizedAccount`
+ * throws `PoisonBatchError`, any other named revert throws as a plain
+ * non-retryable failure.
+ */
+
+export async function submitRoot(
+  contract: {
+    addMerkleRoot(
+      root: string,
+      size: number,
+      overrides?: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
+    ): Promise<TransactionLike>;
+  },
+  provider: {
+    getFeeData(): Promise<{
+      maxFeePerGas: bigint | null;
+      maxPriorityFeePerGas: bigint | null;
+    }>;
+  },
+  root: string,
+  size: number,
+  options: SubmitRootOptions,
+): Promise<SubmitResult> {
+  let attempt = 0;
+
+  const tx = await pRetry(
+    async () => {
+      try {
+        const overrides =
+          attempt === 0
+            ? undefined
+            : computeBumpedFees(
+                await provider.getFeeData(),
+                1 + attempt * 0.25,
+                options.maxFeeGwei,
+              );
+
+        return await contract.addMerkleRoot(root, size, overrides);
+      } catch (error) {
+        const revertName = decodeRevertName(error);
+
+        if (revertName === "RootAlreadyExists") {
+          throw new AbortError(new AlreadyOnChainSignal());
+        }
+
+        if (revertName === "OwnableUnauthorizedAccount") {
+          throw new AbortError(new PoisonBatchError(revertName));
+        }
+
+        if (revertName !== null) {
+          throw new AbortError(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+
+        throw error;
+      }
+    },
+    {
+      retries: options.retries,
+      onFailedAttempt: () => {
+        attempt++;
+      },
+    },
+  ).catch((error) => {
+    if (error instanceof AlreadyOnChainSignal) return null;
+    throw error;
+  });
+
+  if (tx === null) {
+    return { status: "already-on-chain" };
+  }
+
+  return { status: "sent", tx };
 }

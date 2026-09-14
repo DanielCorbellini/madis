@@ -14,7 +14,7 @@ export interface BlockRef {
 export async function findRootOnChain(
   contract: {
     containsMerkleRoot(root: string): Promise<boolean>;
-    filters: { RootAdded: (index?: unknown, root?: string) => unknown };
+    filters: { RootAdded(index?: unknown, root?: string): unknown };
     queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
   },
   provider: {
