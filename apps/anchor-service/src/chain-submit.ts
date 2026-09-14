@@ -1,4 +1,4 @@
-import { parseUnits } from "ethers";
+import { isError, parseUnits } from "ethers";
 
 /**
  * Computes bumped gas fees by applying the multiplier to the provided fee data and capping them at maxFeeGwei.
@@ -25,4 +25,15 @@ export function computeBumpedFees(
     maxFeePerGas: bump(feeData.maxFeePerGas),
     maxPriorityFeePerGas: bump(feeData.maxPriorityFeePerGas),
   };
+}
+
+/**
+ * Decodes the name of a revert error if it's a CALL_EXCEPTION
+ */
+export function decodeRevertName(error: unknown): string | null {
+  if (isError(error, "CALL_EXCEPTION")) {
+    return error.revert?.name ?? null;
+  }
+
+  return null;
 }
