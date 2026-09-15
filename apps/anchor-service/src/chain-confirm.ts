@@ -1,3 +1,5 @@
+import type { ChainProvider } from "./chain.ts";
+
 export interface BlockRef {
   number: number;
   timestamp: number;
@@ -17,9 +19,7 @@ export async function findRootOnChain(
     filters: { RootAdded(index?: unknown, root?: string): unknown };
     queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
   },
-  provider: {
-    getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
-  },
+  provider: Pick<ChainProvider, "getBlock">,
   root: string,
 ): Promise<BlockRef | null> {
   const exists = await contract.containsMerkleRoot(root);
@@ -41,6 +41,7 @@ export async function findRootOnChain(
       `block ${logs[0].blockNumber} for RootAdded(${root}) not found`,
     );
   }
+
   return { number: logs[0].blockNumber, timestamp: block.timestamp };
 }
 
@@ -59,14 +60,7 @@ export class RevertedTransactionError extends Error {
  * `RevertedTransactionError` if the transaction was mined but reverted.
  */
 export async function awaitConfirmation(
-  provider: {
-    waitForTransaction(
-      hash: string,
-      confirms: number,
-      timeout: number,
-    ): Promise<{ status: number; blockNumber: number } | null>;
-    getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
-  },
+  provider: Pick<ChainProvider, "waitForTransaction" | "getBlock">,
   txHash: string,
   confirmations: number,
   timeoutMs: number,
@@ -109,13 +103,10 @@ export type ReceiptOutcome =
  * used to poll a submitted transaction across reconcile cycles.
  */
 export async function inspectTransaction(
-  provider: {
-    getTransactionReceipt(
-      hash: string,
-    ): Promise<{ status: number; blockNumber: number } | null>;
-    getBlockNumber(): Promise<number>;
-    getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
-  },
+  provider: Pick<
+    ChainProvider,
+    "getTransactionReceipt" | "getBlockNumber" | "getBlock"
+  >,
   txHash: string,
   requiredConfirmations: number,
 ): Promise<ReceiptOutcome> {

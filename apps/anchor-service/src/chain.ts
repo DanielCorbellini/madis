@@ -13,6 +13,24 @@ export interface ChainClient {
   contract: ReturnType<typeof getMerkleAnchorRegistry>;
 }
 
+export interface ChainProvider {
+  getFeeData(): Promise<{
+    maxFeePerGas: bigint | null;
+    maxPriorityFeePerGas: bigint | null;
+  }>;
+  getTransaction(hash: string): Promise<{ nonce: number } | null>;
+  getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
+  getBlockNumber(): Promise<number>;
+  getTransactionReceipt(
+    hash: string,
+  ): Promise<{ status: number; blockNumber: number } | null>;
+  waitForTransaction(
+    hash: string,
+    confirms: number,
+    timeout: number,
+  ): Promise<{ status: number; blockNumber: number } | null>;
+}
+
 export function createChainClient(config: ChainClientConfig): ChainClient {
   const provider = new JsonRpcProvider(config.rpcUrl, undefined, {
     staticNetwork: true,

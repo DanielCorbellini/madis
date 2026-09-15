@@ -1,6 +1,7 @@
 import type { ContractTransactionResponse } from "ethers";
 import { isError, parseUnits } from "ethers";
 import pRetry, { AbortError } from "p-retry";
+import type { ChainProvider } from "./chain.ts";
 
 /** The only field this module reads off a sent transaction — mirrors the
  * real ethers type instead of hand-rolling it, so it can't drift. */
@@ -87,12 +88,7 @@ export async function submitRoot(
       overrides?: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
     ): Promise<TransactionLike>;
   },
-  provider: {
-    getFeeData(): Promise<{
-      maxFeePerGas: bigint | null;
-      maxPriorityFeePerGas: bigint | null;
-    }>;
-  },
+  provider: Pick<ChainProvider, "getFeeData">,
   root: string,
   size: number,
   options: SubmitRootOptions,
@@ -168,13 +164,7 @@ export async function resendTransaction(
       },
     ): Promise<TransactionLike>;
   },
-  provider: {
-    getTransaction(hash: string): Promise<{ nonce: number } | null>;
-    getFeeData(): Promise<{
-      maxFeePerGas: bigint | null;
-      maxPriorityFeePerGas: bigint | null;
-    }>;
-  },
+  provider: Pick<ChainProvider, "getTransaction" | "getFeeData">,
   root: string,
   size: number,
   oldTxHash: string,
