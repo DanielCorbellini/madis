@@ -96,3 +96,49 @@ export async function awaitConfirmation(
 
   return { number: receipt.blockNumber, timestamp: block.timestamp };
 }
+
+export type ReceiptOutcome =
+  | { kind: "missing" }
+  | { kind: "reverted" }
+  | { kind: "pending-confirmations"; confirmationsSoFar: number }
+  | { kind: "confirmed"; block: BlockRef };
+
+/**
+ * Non-blocking snapshot of a transaction's on-chain status, unlike
+ * `awaitConfirmation`, never waits;
+ * used to poll a submitted transaction across reconcile cycles.
+ */
+export async function inspectTransaction(
+  provider: {
+    getTransactionReceipt(
+      hash: string,
+    ): Promise<{ status: number; blockNumber: number } | null>;
+    getBlockNumber(): Promise<number>;
+    getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
+  },
+  txHash: string,
+  requiredConfirmations: number,
+): Promise<ReceiptOutcome> {
+  const receipt = await provider.getTransactionReceipt(txHash);
+  if (!receipt) return { kind: "missing" };
+  if (receipt.status === 0) return { kind: "reverted" };
+
+  const currentBlock = await provider.getBlockNumber();
+  const confirmationsSoFar = currentBlock - receipt.blockNumber + 1;
+
+  if (confirmationsSoFar < requiredConfirmations) {
+    return { kind: "pending-confirmations", confirmationsSoFar };
+  }
+
+  const block = await provider.getBlock(receipt.blockNumber);
+  if (!block) {
+    throw new Error(
+      `block ${receipt.blockNumber} for transaction ${txHash} not found`,
+    );
+  }
+
+  return {
+    kind: "confirmed",
+    block: { number: receipt.blockNumber, timestamp: block.timestamp },
+  };
+}
