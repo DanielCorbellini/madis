@@ -1,9 +1,28 @@
 import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
+import type { Pool } from "pg";
 import type { Logger } from "service-runtime";
-import type { Batch, BatchStatus } from "./batch-repository.ts";
-import type { BlockRef, ReceiptOutcome } from "./chain-confirm.ts";
-import type { SubmitResult } from "./chain-submit.ts";
+import {
+  type Batch,
+  type BatchStatus,
+  findInFlightBatches as dbFindInFlightBatches,
+  markConfirmed as dbMarkConfirmed,
+  markFailed as dbMarkFailed,
+  markSubmitted as dbMarkSubmitted,
+  streamBatchRecords as dbStreamBatchRecords,
+} from "./batch-repository.ts";
+import {
+  type BlockRef,
+  findRootOnChain as chainFindRootOnChain,
+  inspectTransaction as chainInspectTransaction,
+  type ReceiptOutcome,
+} from "./chain-confirm.ts";
+import {
+  resendTransaction as chainResendTransaction,
+  submitRoot as chainSubmitRoot,
+  type SubmitResult,
+} from "./chain-submit.ts";
+import type { ChainClient, ChainProvider } from "./chain.ts";
 import type { AnchorableRecord } from "./record.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 
@@ -41,6 +60,10 @@ export interface ReconcileOptions {
  * Resolves batches left from a previous cycle
  * (because the process crashed, or the chain was slow between cycles),
  * rather than being the pipeline that creates new batches from raw records.
+ *
+ * It compares recorded state (batch.status, batch.merkleRoot) against actual
+ * on-chain state (findRootOnChain, inspectTransaction) and resolving divergences
+ * between the two.
  */
 export async function reconcileBatches(
   deps: ReconcileDeps,
@@ -256,4 +279,71 @@ async function reconcileFailed(
       );
     }
   }
+}
+
+/**
+ * Creates a set of dependency functions for reconciling batch statuses.
+ */
+export function createReconcileDeps(
+  chain: ChainClient,
+  pool: Pool,
+  options: { retries: number; maxFeeGwei: number },
+): ReconcileDeps {
+  const contract = {
+    addMerkleRoot: (
+      root: string,
+      size: number,
+      overrides?: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
+    ) => chain.contract.addMerkleRoot(root, size, overrides ?? {}),
+    containsMerkleRoot: (root: string) =>
+      chain.contract.containsMerkleRoot(root),
+    filters: chain.contract.filters,
+    queryFilter: (filter: unknown) =>
+      chain.contract.queryFilter(filter as never),
+  };
+
+  const provider: Pick<
+    ChainProvider,
+    | "getFeeData"
+    | "getTransaction"
+    | "getBlock"
+    | "getBlockNumber"
+    | "getTransactionReceipt"
+  > = {
+    getFeeData: () => chain.provider.getFeeData(),
+    getTransaction: (hash: string) => chain.provider.getTransaction(hash),
+    getBlock: (blockNumber: number) => chain.provider.getBlock(blockNumber),
+    getBlockNumber: () => chain.provider.getBlockNumber(),
+    getTransactionReceipt: async (hash: string) => {
+      const receipt = await chain.provider.getTransactionReceipt(hash);
+      if (!receipt) return null;
+      return { status: receipt.status ?? 0, blockNumber: receipt.blockNumber };
+    },
+  };
+
+  return {
+    findInFlightBatches: () => dbFindInFlightBatches(pool),
+    streamBatchRecords: (batchId) => dbStreamBatchRecords(pool, batchId),
+    markSubmitted: (batchId, txHash) => dbMarkSubmitted(pool, batchId, txHash),
+    markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
+    markFailed: (batchId, errorMessage) =>
+      dbMarkFailed(pool, batchId, errorMessage),
+    findRootOnChain: (root) => chainFindRootOnChain(contract, provider, root),
+    submitRoot: (root, size) =>
+      chainSubmitRoot(contract, provider, root, size, {
+        retries: options.retries,
+        maxFeeGwei: options.maxFeeGwei,
+      }),
+    inspectTransaction: (txHash, confirmations) =>
+      chainInspectTransaction(provider, txHash, confirmations),
+    resendTransaction: (root, size, oldTxHash) =>
+      chainResendTransaction(
+        contract,
+        provider,
+        root,
+        size,
+        oldTxHash,
+        options.maxFeeGwei,
+      ),
+  };
 }
