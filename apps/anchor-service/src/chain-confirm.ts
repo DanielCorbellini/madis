@@ -43,3 +43,56 @@ export async function findRootOnChain(
   }
   return { number: logs[0].blockNumber, timestamp: block.timestamp };
 }
+
+export class RevertedTransactionError extends Error {
+  txHash: string;
+  constructor(txHash: string) {
+    super(`transaction ${txHash} was mined but reverted`);
+    this.name = "RevertedTransactionError";
+    this.txHash = txHash;
+  }
+}
+
+/**
+ * Blocks until `txHash` reaches `confirmations` confirmations (or the
+ * timeout elapses), then resolves its block ref. Throws
+ * `RevertedTransactionError` if the transaction was mined but reverted.
+ */
+export async function awaitConfirmation(
+  provider: {
+    waitForTransaction(
+      hash: string,
+      confirms: number,
+      timeout: number,
+    ): Promise<{ status: number; blockNumber: number } | null>;
+    getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
+  },
+  txHash: string,
+  confirmations: number,
+  timeoutMs: number,
+): Promise<BlockRef> {
+  const receipt = await provider.waitForTransaction(
+    txHash,
+    confirmations,
+    timeoutMs,
+  );
+
+  if (!receipt) {
+    throw new Error(
+      `transaction ${txHash} has no receipt after waiting for confirmations`,
+    );
+  }
+
+  if (receipt.status === 0) {
+    throw new RevertedTransactionError(txHash);
+  }
+
+  const block = await provider.getBlock(receipt.blockNumber);
+  if (!block) {
+    throw new Error(
+      `block ${receipt.blockNumber} for transaction ${txHash} not found`,
+    );
+  }
+
+  return { number: receipt.blockNumber, timestamp: block.timestamp };
+}
