@@ -3,6 +3,7 @@ import { MerkleAnchorRegistry__factory } from "./generated/index.js";
 
 export * from "./deployments.js";
 export * from "./generated/index.js";
+export * from "./contract-interface.js";
 
 export function getMerkleAnchorRegistry(
   address: string,

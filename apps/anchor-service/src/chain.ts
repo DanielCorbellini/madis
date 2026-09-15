@@ -1,4 +1,8 @@
-import { getMerkleAnchorRegistry } from "contracts-shared";
+import {
+  adaptMerkleAnchorRegistry,
+  getMerkleAnchorRegistry,
+  type MerkleAnchorRegistryLike,
+} from "contracts-shared";
 import { getAddress, JsonRpcProvider, Wallet } from "ethers";
 import type { AnchorConfig } from "./config.ts";
 
@@ -10,7 +14,7 @@ type ChainClientConfig = Pick<
 export interface ChainClient {
   provider: JsonRpcProvider;
   wallet: Wallet;
-  contract: ReturnType<typeof getMerkleAnchorRegistry>;
+  contract: MerkleAnchorRegistryLike;
 }
 
 /**
@@ -41,7 +45,9 @@ export function createChainClient(config: ChainClientConfig): ChainClient {
     staticNetwork: true,
   });
   const wallet = new Wallet(config.anchorPrivateKey, provider);
-  const contract = getMerkleAnchorRegistry(config.contractAddress, wallet);
+  const contract = adaptMerkleAnchorRegistry(
+    getMerkleAnchorRegistry(config.contractAddress, wallet),
+  );
 
   return { provider, wallet, contract };
 }
@@ -71,7 +77,7 @@ export async function assertContractDeployed(
 }
 
 export async function assertWalletIsOwner(
-  contract: { owner(): Promise<string> },
+  contract: Pick<MerkleAnchorRegistryLike, "owner">,
   walletAddress: string,
 ): Promise<void> {
   const owner = await contract.owner();

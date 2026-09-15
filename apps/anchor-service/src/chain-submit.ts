@@ -1,3 +1,4 @@
+import type { MerkleAnchorRegistryLike } from "contracts-shared";
 import type { ContractTransactionResponse } from "ethers";
 import { isError, parseUnits } from "ethers";
 import pRetry, { AbortError } from "p-retry";
@@ -80,13 +81,7 @@ export function decodeRevertName(error: unknown): string | null {
  * non-retryable failure.
  */
 export async function submitRoot(
-  contract: {
-    addMerkleRoot(
-      root: string,
-      size: number,
-      overrides?: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
-    ): Promise<TransactionLike>;
-  },
+  contract: Pick<MerkleAnchorRegistryLike, "addMerkleRoot">,
   provider: Pick<ChainProvider, "getFeeData">,
   root: string,
   size: number,
@@ -152,17 +147,7 @@ export async function submitRoot(
  * of a new pending transaction.
  */
 export async function resendTransaction(
-  contract: {
-    addMerkleRoot(
-      root: string,
-      size: number,
-      overrides: {
-        maxFeePerGas: bigint;
-        maxPriorityFeePerGas: bigint;
-        nonce: number;
-      },
-    ): Promise<TransactionLike>;
-  },
+  contract: Pick<MerkleAnchorRegistryLike, "addMerkleRoot">,
   provider: Pick<ChainProvider, "getTransaction" | "getFeeData">,
   root: string,
   size: number,

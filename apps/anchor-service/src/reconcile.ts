@@ -289,19 +289,6 @@ export function createReconcileDeps(
   pool: Pool,
   options: { retries: number; maxFeeGwei: number },
 ): ReconcileDeps {
-  const contract = {
-    addMerkleRoot: (
-      root: string,
-      size: number,
-      overrides?: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint },
-    ) => chain.contract.addMerkleRoot(root, size, overrides ?? {}),
-    containsMerkleRoot: (root: string) =>
-      chain.contract.containsMerkleRoot(root),
-    filters: chain.contract.filters,
-    queryFilter: (filter: unknown) =>
-      chain.contract.queryFilter(filter as never),
-  };
-
   const provider: Pick<
     ChainProvider,
     | "getFeeData"
@@ -328,9 +315,10 @@ export function createReconcileDeps(
     markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
     markFailed: (batchId, errorMessage) =>
       dbMarkFailed(pool, batchId, errorMessage),
-    findRootOnChain: (root) => chainFindRootOnChain(contract, provider, root),
+    findRootOnChain: (root) =>
+      chainFindRootOnChain(chain.contract, provider, root),
     submitRoot: (root, size) =>
-      chainSubmitRoot(contract, provider, root, size, {
+      chainSubmitRoot(chain.contract, provider, root, size, {
         retries: options.retries,
         maxFeeGwei: options.maxFeeGwei,
       }),
@@ -338,7 +326,7 @@ export function createReconcileDeps(
       chainInspectTransaction(provider, txHash, confirmations),
     resendTransaction: (root, size, oldTxHash) =>
       chainResendTransaction(
-        contract,
+        chain.contract,
         provider,
         root,
         size,

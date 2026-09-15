@@ -1,3 +1,4 @@
+import type { MerkleAnchorRegistryLike } from "contracts-shared";
 import type { ChainProvider } from "./chain.ts";
 
 export interface BlockRef {
@@ -29,11 +30,10 @@ export type ReceiptOutcome =
  * @throws An error if the root is reported on-chain but no matching event is found, or if the block for the event cannot be retrieved.
  */
 export async function findRootOnChain(
-  contract: {
-    containsMerkleRoot(root: string): Promise<boolean>;
-    filters: { RootAdded(index?: unknown, root?: string): unknown };
-    queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
-  },
+  contract: Pick<
+    MerkleAnchorRegistryLike,
+    "containsMerkleRoot" | "filters" | "queryFilter"
+  >,
   provider: Pick<ChainProvider, "getBlock">,
   root: string,
 ): Promise<BlockRef | null> {
