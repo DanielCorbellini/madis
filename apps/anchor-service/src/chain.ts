@@ -13,6 +13,9 @@ export interface ChainClient {
   contract: ReturnType<typeof getMerkleAnchorRegistry>;
 }
 
+/**
+ * Custom interface based on the Provider interface from ethers.js, made for the needs of this application.
+ */
 export interface ChainProvider {
   getFeeData(): Promise<{
     maxFeePerGas: bigint | null;
@@ -29,6 +32,8 @@ export interface ChainProvider {
     confirms: number,
     timeout: number,
   ): Promise<{ status: number; blockNumber: number } | null>;
+  getCode(address: string): Promise<string>;
+  getNetwork(): Promise<{ chainId: bigint }>;
 }
 
 export function createChainClient(config: ChainClientConfig): ChainClient {
@@ -42,7 +47,7 @@ export function createChainClient(config: ChainClientConfig): ChainClient {
 }
 
 export async function assertNetworkMatches(
-  provider: { getNetwork(): Promise<{ chainId: bigint }> },
+  provider: Pick<ChainProvider, "getNetwork">,
   expectedChainId: number,
 ): Promise<void> {
   const network = await provider.getNetwork();
@@ -55,7 +60,7 @@ export async function assertNetworkMatches(
 }
 
 export async function assertContractDeployed(
-  provider: { getCode(address: string): Promise<string> },
+  provider: Pick<ChainProvider, "getCode">,
   address: string,
 ): Promise<void> {
   const code = await provider.getCode(address);

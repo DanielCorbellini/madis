@@ -5,6 +5,21 @@ export interface BlockRef {
   timestamp: number;
 }
 
+export class RevertedTransactionError extends Error {
+  txHash: string;
+  constructor(txHash: string) {
+    super(`transaction ${txHash} was mined but reverted`);
+    this.name = "RevertedTransactionError";
+    this.txHash = txHash;
+  }
+}
+
+export type ReceiptOutcome =
+  | { kind: "missing" }
+  | { kind: "reverted" }
+  | { kind: "pending-confirmations"; confirmationsSoFar: number }
+  | { kind: "confirmed"; block: BlockRef };
+
 /**
  * Finds the block number and timestamp of a root on-chain by checking if the root exists and querying the RootAdded event.
  * @param contract - The contract instance with methods to check for the root and query events.
@@ -45,15 +60,6 @@ export async function findRootOnChain(
   return { number: logs[0].blockNumber, timestamp: block.timestamp };
 }
 
-export class RevertedTransactionError extends Error {
-  txHash: string;
-  constructor(txHash: string) {
-    super(`transaction ${txHash} was mined but reverted`);
-    this.name = "RevertedTransactionError";
-    this.txHash = txHash;
-  }
-}
-
 /**
  * Blocks until `txHash` reaches `confirmations` confirmations (or the
  * timeout elapses), then resolves its block ref. Throws
@@ -90,12 +96,6 @@ export async function awaitConfirmation(
 
   return { number: receipt.blockNumber, timestamp: block.timestamp };
 }
-
-export type ReceiptOutcome =
-  | { kind: "missing" }
-  | { kind: "reverted" }
-  | { kind: "pending-confirmations"; confirmationsSoFar: number }
-  | { kind: "confirmed"; block: BlockRef };
 
 /**
  * Non-blocking snapshot of a transaction's on-chain status, unlike

@@ -7,6 +7,26 @@ import type { ChainProvider } from "./chain.ts";
  * real ethers type instead of hand-rolling it, so it can't drift. */
 export type TransactionLike = Pick<ContractTransactionResponse, "hash">;
 
+export class PoisonBatchError extends Error {
+  revertName: string;
+  constructor(revertName: string) {
+    super(`contract call reverted with ${revertName} — not retryable`);
+    this.name = "PoisonBatchError";
+    this.revertName = revertName;
+  }
+}
+
+class AlreadyOnChainSignal extends Error {}
+
+export type SubmitResult =
+  | { status: "sent"; tx: TransactionLike }
+  | { status: "already-on-chain" };
+
+export interface SubmitRootOptions {
+  retries: number;
+  maxFeeGwei: number;
+}
+
 /**
  * Computes bumped gas fees by applying the multiplier to the provided fee data and capping them at maxFeeGwei.
  * @param feeData - The current fee data on the network.
@@ -43,26 +63,6 @@ export function decodeRevertName(error: unknown): string | null {
   }
 
   return null;
-}
-
-export class PoisonBatchError extends Error {
-  revertName: string;
-  constructor(revertName: string) {
-    super(`contract call reverted with ${revertName} — not retryable`);
-    this.name = "PoisonBatchError";
-    this.revertName = revertName;
-  }
-}
-
-class AlreadyOnChainSignal extends Error {}
-
-export type SubmitResult =
-  | { status: "sent"; tx: TransactionLike }
-  | { status: "already-on-chain" };
-
-export interface SubmitRootOptions {
-  retries: number;
-  maxFeeGwei: number;
 }
 
 /**
