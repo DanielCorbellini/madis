@@ -1,9 +1,11 @@
+import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
 import type { Logger } from "service-runtime";
 import type { Batch, BatchStatus } from "./batch-repository.ts";
 import type { BlockRef, ReceiptOutcome } from "./chain-confirm.ts";
 import type { SubmitResult } from "./chain-submit.ts";
 import type { AnchorableRecord } from "./record.ts";
+import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 
 export interface ReconcileDeps {
   findInFlightBatches(): Promise<Batch[]>;
@@ -61,7 +63,7 @@ export async function reconcileBatches(
       pending: () => reconcilePending(deps, logger, batch, summary),
       submitted: () =>
         reconcileSubmitted(deps, logger, batch, options, summary),
-      // "failed" is added by Task 9.
+      failed: () => reconcileFailed(deps, logger, batch, options, summary),
     };
 
     await statusHandlers[batch.status]?.();
@@ -165,6 +167,93 @@ async function reconcileSubmitted(
       await deps.markSubmitted(batch.id, tx.hash);
       summary.resent++;
       return;
+    }
+  }
+}
+
+async function rebuildTreeRoot(
+  deps: ReconcileDeps,
+  batchId: number,
+): Promise<string> {
+  const entries: LeafEntry[] = [];
+
+  for await (const record of deps.streamBatchRecords(batchId)) {
+    entries.push({
+      recordId: record.id,
+      leaf: computeLeafHash(
+        String(record.id),
+        record.payload,
+        record.signature,
+      ),
+    });
+  }
+
+  if (entries.length === 0) {
+    throw new Error(
+      `batch ${batchId} has no anchor_records to rebuild its tree from`,
+    );
+  }
+
+  return buildAnchorTree(entries).root;
+}
+
+async function reconcileFailed(
+  deps: ReconcileDeps,
+  logger: Logger,
+  batch: Batch,
+  options: ReconcileOptions,
+  summary: ReconcileSummary,
+): Promise<void> {
+  const rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
+
+  if (rebuiltRoot !== batch.merkleRoot) {
+    const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`;
+
+    logger.error(
+      { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
+      message,
+    );
+
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+    return;
+  }
+
+  const nextRetryCount = batch.retryCount + 1;
+  try {
+    const result = await deps.submitRoot(batch.merkleRoot, batch.size);
+
+    if (result.status === "already-on-chain") {
+      const block = await deps.findRootOnChain(batch.merkleRoot);
+
+      if (!block) {
+        const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
+        await deps.markFailed(batch.id, message);
+        summary.failed++;
+        return;
+      }
+
+      await deps.markConfirmed(batch.id, block);
+      summary.confirmed++;
+      return;
+    }
+
+    await deps.markSubmitted(batch.id, result.tx.hash);
+    summary.resent++;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+  } finally {
+    if (nextRetryCount >= options.retryAlertThreshold) {
+      logger.error(
+        {
+          batchId: batch.id,
+          retryCount: nextRetryCount,
+          threshold: options.retryAlertThreshold,
+        },
+        `batch ${batch.id} has failed ${nextRetryCount} times — check for a poison batch (wallet not contract owner, exhausted funds, or a stuck config issue)`,
+      );
     }
   }
 }
