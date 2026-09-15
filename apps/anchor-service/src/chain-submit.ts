@@ -149,3 +149,50 @@ export async function submitRoot(
 
   return { status: "sent", tx };
 }
+
+/**
+ * Replaces a transaction that did send successfully but is stuck
+ * by resubmitting `addMerkleRoot` with the same
+ * nonce and a bumped fee, so the network treats it as a replacement instead
+ * of a new pending transaction.
+ */
+export async function resendTransaction(
+  contract: {
+    addMerkleRoot(
+      root: string,
+      size: number,
+      overrides: {
+        maxFeePerGas: bigint;
+        maxPriorityFeePerGas: bigint;
+        nonce: number;
+      },
+    ): Promise<TransactionLike>;
+  },
+  provider: {
+    getTransaction(hash: string): Promise<{ nonce: number } | null>;
+    getFeeData(): Promise<{
+      maxFeePerGas: bigint | null;
+      maxPriorityFeePerGas: bigint | null;
+    }>;
+  },
+  root: string,
+  size: number,
+  oldTxHash: string,
+  maxFeeGwei: number,
+): Promise<TransactionLike> {
+  const oldTx = await provider.getTransaction(oldTxHash);
+
+  if (!oldTx) {
+    throw new Error(
+      `stuck transaction ${oldTxHash} was not found — cannot determine its nonce to replace it`,
+    );
+  }
+
+  const bumped = computeBumpedFees(
+    await provider.getFeeData(),
+    1.25,
+    maxFeeGwei,
+  );
+
+  return contract.addMerkleRoot(root, size, { ...bumped, nonce: oldTx.nonce });
+}
