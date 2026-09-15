@@ -1,0 +1,170 @@
+import type { ContractTransactionResponse } from "ethers/contract";
+import type { Logger } from "service-runtime";
+import type { Batch, BatchStatus } from "./batch-repository.ts";
+import type { BlockRef, ReceiptOutcome } from "./chain-confirm.ts";
+import type { SubmitResult } from "./chain-submit.ts";
+import type { AnchorableRecord } from "./record.ts";
+
+export interface ReconcileDeps {
+  findInFlightBatches(): Promise<Batch[]>;
+  streamBatchRecords(batchId: number): AsyncGenerator<AnchorableRecord>;
+  markSubmitted(batchId: number, txHash: string): Promise<void>;
+  markConfirmed(batchId: number, block: BlockRef): Promise<void>;
+  markFailed(batchId: number, errorMessage: string): Promise<void>;
+  findRootOnChain(root: string): Promise<BlockRef | null>;
+  submitRoot(root: string, size: number): Promise<SubmitResult>;
+  inspectTransaction(
+    txHash: string,
+    confirmations: number,
+  ): Promise<ReceiptOutcome>;
+  resendTransaction(
+    root: string,
+    size: number,
+    oldTxHash: string,
+  ): Promise<Pick<ContractTransactionResponse, "hash">>;
+}
+
+export interface ReconcileSummary {
+  confirmed: number;
+  resent: number;
+  failed: number;
+}
+
+export interface ReconcileOptions {
+  confirmations: number;
+  retryAlertThreshold: number;
+}
+
+/**
+ * Resolves batches left from a previous cycle
+ * (because the process crashed, or the chain was slow between cycles),
+ * rather than being the pipeline that creates new batches from raw records.
+ */
+export async function reconcileBatches(
+  deps: ReconcileDeps,
+  options: ReconcileOptions,
+  logger: Logger,
+): Promise<ReconcileSummary> {
+  const summary: ReconcileSummary = { confirmed: 0, resent: 0, failed: 0 };
+  const batches = await deps.findInFlightBatches();
+
+  for (const batch of batches) {
+    const alreadyOnChain = await deps.findRootOnChain(batch.merkleRoot);
+
+    if (alreadyOnChain) {
+      await deps.markConfirmed(batch.id, alreadyOnChain);
+      summary.confirmed++;
+      continue;
+    }
+
+    const statusHandlers: Partial<Record<BatchStatus, () => Promise<void>>> = {
+      pending: () => reconcilePending(deps, logger, batch, summary),
+      submitted: () =>
+        reconcileSubmitted(deps, logger, batch, options, summary),
+      // "failed" is added by Task 9.
+    };
+
+    await statusHandlers[batch.status]?.();
+  }
+
+  return summary;
+}
+
+async function reconcilePending(
+  deps: ReconcileDeps,
+  logger: Logger,
+  batch: Batch,
+  summary: ReconcileSummary,
+): Promise<void> {
+  let result: SubmitResult;
+  try {
+    result = await deps.submitRoot(batch.merkleRoot, batch.size);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    logger.error(
+      { batchId: batch.id, err: message },
+      "failed to submit pending batch",
+    );
+
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+
+    return;
+  }
+
+  if (result.status === "already-on-chain") {
+    const block = await deps.findRootOnChain(batch.merkleRoot);
+
+    if (!block) {
+      const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
+      logger.error({ batchId: batch.id }, message);
+
+      await deps.markFailed(batch.id, message);
+      summary.failed++;
+      return;
+    }
+
+    await deps.markConfirmed(batch.id, block);
+    summary.confirmed++;
+    return;
+  }
+
+  await deps.markSubmitted(batch.id, result.tx.hash);
+  summary.resent++;
+}
+
+async function reconcileSubmitted(
+  deps: ReconcileDeps,
+  logger: Logger,
+  batch: Batch,
+  options: ReconcileOptions,
+  summary: ReconcileSummary,
+): Promise<void> {
+  if (!batch.transactionHash) {
+    throw new Error(
+      `batch ${batch.id} is 'submitted' but has no transaction hash — invariant violation`,
+    );
+  }
+
+  const outcome = await deps.inspectTransaction(
+    batch.transactionHash,
+    options.confirmations,
+  );
+
+  switch (outcome.kind) {
+    case "confirmed":
+      await deps.markConfirmed(batch.id, outcome.block);
+      summary.confirmed++;
+      return;
+
+    case "reverted":
+      logger.warn(
+        { batchId: batch.id, txHash: batch.transactionHash },
+        "submitted transaction reverted",
+      );
+
+      await deps.markFailed(
+        batch.id,
+        `transaction ${batch.transactionHash} reverted`,
+      );
+
+      summary.failed++;
+      return;
+
+    case "pending-confirmations":
+      return; // re-checked next cycle
+
+    case "missing": {
+      const tx = await deps.resendTransaction(
+        batch.merkleRoot,
+        batch.size,
+        batch.transactionHash,
+      );
+
+      await deps.markSubmitted(batch.id, tx.hash);
+      summary.resent++;
+      return;
+    }
+  }
+}

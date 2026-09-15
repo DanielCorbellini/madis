@@ -79,7 +79,6 @@ export function decodeRevertName(error: unknown): string | null {
  * throws `PoisonBatchError`, any other named revert throws as a plain
  * non-retryable failure.
  */
-
 export async function submitRoot(
   contract: {
     addMerkleRoot(
