@@ -2,8 +2,10 @@ import type { Logger } from "service-runtime";
 import type { AnchorEntry } from "./batch-repository.ts";
 import { RevertedTransactionError, type BlockRef } from "./chain-confirm.ts";
 import type { SubmitResult } from "./chain-submit.ts";
+import { buildCycleSummary, type CycleSummary } from "./metrics.ts";
 import type { ReconcileSummary } from "./reconcile.ts";
 import type { AnchorableRecord } from "./record.ts";
+import { snapshotMemory, timed } from "./timing.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 import { validateRecord } from "./validation.ts";
 
@@ -37,11 +39,13 @@ export interface CollectedBatch {
 }
 
 /**
- * Streams every un-anchored record, re-validates each one
- * (signature + whitelist), alerts and excludes the ones that fail, then
- * builds one Merkle tree from the rest.
+ * 1. Get every un-anchored record
+ * 2. Validates each one (signature + whitelist)
+ * 3. Alerts the ones that fails
+ * 4. Build a Merkle Tree from the valid ones
+ *
  * Returns `null` ("nothing to anchor") if zero records passed validation;
- * never calls `buildAnchorTree` with an empty array (it throws).
+ * never calls `buildAnchorTree` with an empty array.
  */
 export async function collectValidBatch(
   deps: Pick<CycleDeps, "streamUnanchoredRecords" | "recordSignatureMismatch">,
@@ -261,4 +265,96 @@ export async function submitAndConfirmBatch(
       stageMs: { submit: submitMs, confirm: confirmMs },
     };
   }
+}
+
+export interface CycleOptions {
+  cycleNumber: number;
+  whitelistedAddresses: string[];
+  confirmations: number;
+  confirmationTimeoutMs: number;
+}
+
+/**
+ * Sequences one full anchoring cycle:
+ * 1. Phase 0 (reconcile in-flight batches),
+ * 2. Phases 1–3 (collect a new valid batch, or "nothing to anchor"),
+ * 3. Phase 4 (persist),
+ * 4. Phases 5–6 (submit + await confirmation)
+ * 5. Phase 7 (summary).
+ */
+export async function runCycle(
+  deps: CycleDeps,
+  options: CycleOptions,
+  logger: Logger,
+): Promise<CycleSummary> {
+  const cycleStart = performance.now();
+
+  // Phase 0
+  const { result: reconciled, ms: reconcileMs } = await timed(() =>
+    deps.reconcileBatches(),
+  );
+
+  // Phase 1-3
+  const { result: collected, ms: collectMs } = await timed(() =>
+    collectValidBatch(deps, options.whitelistedAddresses, logger),
+  );
+
+  if (!collected) {
+    logger.info({ cycle: options.cycleNumber }, "nothing to anchor this cycle");
+    return buildCycleSummary({
+      cycle: options.cycleNumber,
+      reconciled,
+      scanned: 0,
+      rejected: 0,
+      batched: 0,
+      root: null,
+      txHash: null,
+      blockNumber: null,
+      status: "nothing-to-anchor",
+      durationMs: performance.now() - cycleStart,
+      stageMs: { reconcile: reconcileMs, collect: collectMs },
+      peakRssBytes: snapshotMemory().rssBytes,
+    });
+  }
+
+  // Phase 4
+  const { result: batchId, ms: persistMs } = await timed(() =>
+    deps.persistBatch({ root: collected.root, entries: collected.entries }),
+  );
+
+  // Phase 5-6
+  const submitResult = await submitAndConfirmBatch(
+    deps,
+    { id: batchId, merkleRoot: collected.root, size: collected.size },
+    {
+      confirmations: options.confirmations,
+      confirmationTimeoutMs: options.confirmationTimeoutMs,
+    },
+    logger,
+  );
+
+  // Phase 7
+  const summary = buildCycleSummary({
+    cycle: options.cycleNumber,
+    reconciled,
+    scanned: collected.scannedCount,
+    rejected: collected.rejectedCount,
+    batched: collected.entries.length,
+    root: collected.root,
+    txHash: submitResult.status === "failed" ? null : submitResult.txHash,
+    blockNumber:
+      submitResult.status === "confirmed" ? submitResult.block.number : null,
+    status: submitResult.status,
+    durationMs: performance.now() - cycleStart,
+    stageMs: {
+      reconcile: reconcileMs,
+      ...collected.stageMs,
+      persist: persistMs,
+      ...submitResult.stageMs,
+    },
+    peakRssBytes: snapshotMemory().rssBytes,
+  });
+
+  logger.info(summary, "cycle complete");
+  return summary;
 }
