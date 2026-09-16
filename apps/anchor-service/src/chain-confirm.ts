@@ -22,12 +22,8 @@ export type ReceiptOutcome =
   | { kind: "confirmed"; block: BlockRef };
 
 /**
- * Finds the block number and timestamp of a root on-chain by checking if the root exists and querying the RootAdded event.
- * @param contract - The contract instance with methods to check for the root and query events.
- * @param provider - The provider instance to fetch block details.
- * @param root - The Merkle root to check on-chain.
- * @returns A BlockRef object containing the block number and timestamp if the root is found, or null if not found.
- * @throws An error if the root is reported on-chain but no matching event is found, or if the block for the event cannot be retrieved.
+ * Finds the block number and timestamp of a root on-chain by checking if the root
+ * exists and querying the RootAdded event.
  */
 export async function findRootOnChain(
   contract: Pick<
