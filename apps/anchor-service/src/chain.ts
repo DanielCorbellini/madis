@@ -40,6 +40,9 @@ export interface ChainProvider {
   getNetwork(): Promise<{ chainId: bigint }>;
 }
 
+/**
+ * Creates a ChainClient instance with a provider, wallet, and contract based on the provided configuration.
+ */
 export function createChainClient(config: ChainClientConfig): ChainClient {
   const provider = new JsonRpcProvider(config.rpcUrl, undefined, {
     staticNetwork: true,
@@ -52,6 +55,10 @@ export function createChainClient(config: ChainClientConfig): ChainClient {
   return { provider, wallet, contract };
 }
 
+/**
+ * Asserts that the network returned by the provider matches the expected chain ID.
+ * Throws an error if the chain IDs do not match.
+ */
 export async function assertNetworkMatches(
   provider: Pick<ChainProvider, "getNetwork">,
   expectedChainId: number,
@@ -65,6 +72,10 @@ export async function assertNetworkMatches(
   }
 }
 
+/**
+ * Asserts that a contract is deployed at the given address by checking if the bytecode is non-empty.
+ * Throws an error if the contract is not deployed.
+ */
 export async function assertContractDeployed(
   provider: Pick<ChainProvider, "getCode">,
   address: string,
@@ -76,6 +87,10 @@ export async function assertContractDeployed(
   }
 }
 
+/**
+ * Asserts that the given wallet address is the owner of the contract.
+ * Throws an error if the wallet is not the owner.
+ */
 export async function assertWalletIsOwner(
   contract: Pick<MerkleAnchorRegistryLike, "owner">,
   walletAddress: string,

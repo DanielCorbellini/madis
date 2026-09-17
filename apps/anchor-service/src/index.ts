@@ -15,7 +15,7 @@ import {
 } from "./chain.ts";
 import type { AnchorConfig } from "./config.ts";
 import { loadConfig } from "./config.ts";
-import { runCycle, type CycleDeps } from "./cycle.ts";
+import { createCycleDeps, runCycle, type CycleDeps } from "./cycle.ts";
 
 export async function main() {
   const config = loadConfig();
@@ -47,14 +47,47 @@ export async function main() {
       { wallet: chain.wallet.address },
       "chain connection ok — anchor wallet is the contract owner",
     );
-
-    logger.info("startup checks passed; scheduler is not wired yet");
-  } finally {
+  } catch (error) {
     await pool.end();
     chain.provider.destroy();
+    throw error;
   }
+
+  const deps = createCycleDeps(chain, pool, config, logger);
+
+  let shutdownRequested = false;
+  const scheduler = createCycleScheduler(
+    deps,
+    config,
+    logger,
+    () => shutdownRequested,
+  );
+
+  logger.info({ schedule: config.cronSchedule }, "scheduler started");
+
+  const shutdown = async () => {
+    logger.info("shutdown requested");
+    await shutdownGracefully({
+      cron: scheduler.cron,
+      pool,
+      provider: chain.provider,
+      getCurrentCycle: scheduler.getCurrentCycle,
+      requestAbort: () => {
+        shutdownRequested = true;
+      },
+      shutdownGraceMs: config.shutdownGraceMs,
+      logger,
+    });
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
+/**
+ * If this file is run directly (e.g., `node index.js`), execute the main function.
+ * If this file is imported as a module, do not execute the main function.
+ */
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((error) => {
     console.error(error);
