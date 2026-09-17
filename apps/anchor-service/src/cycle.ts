@@ -309,6 +309,7 @@ export async function runCycle(
   deps: CycleDeps,
   options: CycleOptions,
   logger: Logger,
+  shouldAbort: () => boolean = () => false,
 ): Promise<CycleSummary> {
   const cycleStart = performance.now();
 
@@ -345,6 +346,32 @@ export async function runCycle(
   const { result: batchId, ms: persistMs } = await timed(() =>
     deps.persistBatch({ root: collected.root, entries: collected.entries }),
   );
+
+  if (shouldAbort()) {
+    logger.warn(
+      { cycle: options.cycleNumber, batchId },
+      "shutdown requested — leaving batch 'pending' for the next startup's Phase 0 to submit",
+    );
+
+    return buildCycleSummary({
+      cycle: options.cycleNumber,
+      reconciled,
+      scanned: collected.scannedCount,
+      rejected: collected.rejectedCount,
+      batched: collected.entries.length,
+      root: collected.root,
+      txHash: null,
+      blockNumber: null,
+      status: "aborted",
+      durationMs: performance.now() - cycleStart,
+      stageMs: {
+        reconcile: reconcileMs,
+        ...collected.stageMs,
+        persist: persistMs,
+      },
+      peakRssBytes: snapshotMemory().rssBytes,
+    });
+  }
 
   // Phase 5-6
   const submitResult = await submitAndConfirmBatch(
