@@ -212,6 +212,9 @@ importers:
       contracts-shared:
         specifier: workspace:*
         version: link:../../packages/contracts-shared
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
       crypto-utils:
         specifier: workspace:*
         version: link:../../packages/crypto-utils
@@ -221,9 +224,6 @@ importers:
       ethers:
         specifier: ^6.17.0
         version: 6.17.0
-      node-cron:
-        specifier: ^3.0.3
-        version: 3.0.3
       p-retry:
         specifier: ^6.2.1
         version: 6.2.1
@@ -243,9 +243,6 @@ importers:
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
-      '@types/node-cron':
-        specifier: ^3.0.11
-        version: 3.0.11
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.3
@@ -1182,6 +1179,10 @@ packages:
     resolution: {integrity: sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==}
     engines: {node: '>=0.8'}
     hasBin: true
+
+  croner@10.0.1:
+    resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
+    engines: {node: '>=18.0'}
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -2780,6 +2781,8 @@ snapshots:
   cookie@1.1.1: {}
 
   crc-32@1.2.2: {}
+
+  croner@10.0.1: {}
 
   cross-spawn@7.0.6:
     dependencies:
