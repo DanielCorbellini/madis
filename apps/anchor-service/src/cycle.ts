@@ -1,10 +1,33 @@
+import type { Pool } from "pg";
 import type { Logger } from "service-runtime";
-import type { AnchorEntry } from "./batch-repository.ts";
-import { RevertedTransactionError, type BlockRef } from "./chain-confirm.ts";
-import type { SubmitResult } from "./chain-submit.ts";
+import { recordSignatureMismatch as dbRecordSignatureMismatch } from "./alerts.ts";
+import {
+  type AnchorEntry,
+  markConfirmed as dbMarkConfirmed,
+  markFailed as dbMarkFailed,
+  markSubmitted as dbMarkSubmitted,
+  persistBatch as dbPersistBatch,
+} from "./batch-repository.ts";
+import {
+  type BlockRef,
+  awaitConfirmation as chainAwaitConfirmation,
+  findRootOnChain as chainFindRootOnChain,
+  RevertedTransactionError,
+} from "./chain-confirm.ts";
+import {
+  submitRoot as chainSubmitRoot,
+  type SubmitResult,
+} from "./chain-submit.ts";
+import type { ChainClient, ChainProvider } from "./chain.ts";
+import type { AnchorConfig } from "./config.ts";
 import { buildCycleSummary, type CycleSummary } from "./metrics.ts";
-import type { ReconcileSummary } from "./reconcile.ts";
+import {
+  createReconcileDeps,
+  reconcileBatches,
+  type ReconcileSummary,
+} from "./reconcile.ts";
 import type { AnchorableRecord } from "./record.ts";
+import { streamUnanchoredRecords as dbStreamUnanchoredRecords } from "./records-source.ts";
 import { snapshotMemory, timed } from "./timing.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 import { validateRecord } from "./validation.ts";
@@ -301,6 +324,7 @@ export async function runCycle(
 
   if (!collected) {
     logger.info({ cycle: options.cycleNumber }, "nothing to anchor this cycle");
+
     return buildCycleSummary({
       cycle: options.cycleNumber,
       reconciled,
@@ -357,4 +381,68 @@ export async function runCycle(
 
   logger.info(summary, "cycle complete");
   return summary;
+}
+
+/**
+ * Creates the dependencies for a single anchoring cycle, including the reconciliation and submission logic.
+ */
+export function createCycleDeps(
+  chain: ChainClient,
+  pool: Pool,
+  config: Pick<
+    AnchorConfig,
+    | "confirmations"
+    | "confirmationTimeoutMs"
+    | "maxFeeGwei"
+    | "txRetries"
+    | "retryAlertThreshold"
+  >,
+  logger: Logger,
+): CycleDeps {
+  const reconcileDeps = createReconcileDeps(chain, pool, {
+    retries: config.txRetries,
+    maxFeeGwei: config.maxFeeGwei,
+  });
+
+  const provider: Pick<ChainProvider, "waitForTransaction" | "getBlock"> = {
+    getBlock: (blockNumber) => chain.provider.getBlock(blockNumber),
+    waitForTransaction: async (hash, confirms, timeout) => {
+      const receipt = await chain.provider.waitForTransaction(
+        hash,
+        confirms,
+        timeout,
+      );
+      if (!receipt) return null;
+      return { status: receipt.status ?? 0, blockNumber: receipt.blockNumber };
+    },
+  };
+
+  return {
+    reconcileBatches: () =>
+      reconcileBatches(
+        reconcileDeps,
+        {
+          confirmations: config.confirmations,
+          retryAlertThreshold: config.retryAlertThreshold,
+        },
+        logger,
+      ),
+    streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
+    recordSignatureMismatch: (recordId, details) =>
+      dbRecordSignatureMismatch(pool, recordId, details),
+    persistBatch: (batch) => dbPersistBatch(pool, batch),
+    findRootOnChain: (root) =>
+      chainFindRootOnChain(chain.contract, chain.provider, root),
+    submitRoot: (root, size) =>
+      chainSubmitRoot(chain.contract, chain.provider, root, size, {
+        retries: config.txRetries,
+        maxFeeGwei: config.maxFeeGwei,
+      }),
+    awaitConfirmation: (txHash, confirmations, timeoutMs) =>
+      chainAwaitConfirmation(provider, txHash, confirmations, timeoutMs),
+    markSubmitted: (batchId, txHash) => dbMarkSubmitted(pool, batchId, txHash),
+    markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
+    markFailed: (batchId, errorMessage) =>
+      dbMarkFailed(pool, batchId, errorMessage),
+  };
 }
