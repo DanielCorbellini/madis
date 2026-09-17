@@ -1,5 +1,6 @@
 import { Cron } from "croner";
 import { pathToFileURL } from "node:url";
+import type { Pool } from "pg";
 import {
   checkDatabaseConnection,
   createDbPool,
@@ -125,4 +126,62 @@ export function createCycleScheduler(
     getCycleCount: () => cycleCount,
     getCurrentCycle: () => currentCycle,
   };
+}
+
+export interface ShutdownDeps {
+  cron: Pick<Cron, "stop">;
+  pool: Pick<Pool, "end">;
+  provider: { destroy(): void };
+  getCurrentCycle(): Promise<void> | null;
+  requestAbort(): void;
+  shutdownGraceMs: number;
+  logger: Logger;
+  exit?: (code: number) => void;
+}
+
+/**
+ * Stops the scheduler and, if a cycle is in-flight, waits for it — up to
+ * `shutdownGraceMs` — before closing the DB pool and destroying the chain
+ * provider. `requestAbort()` flips the flag `runCycle`'s `shouldAbort` reads,
+ * so an in-flight cycle that hasn't reached Phase 5 yet leaves its batch
+ * `pending` instead of starting a send after we've already asked it to stop.
+ * If the grace period elapses first, hard-exits via the injected `exit`
+ * (defaulting to the real `process.exit`) rather than waiting indefinitely
+ * or risking a graceful close on a genuinely stuck cycle.
+ */
+export async function shutdownGracefully(deps: ShutdownDeps): Promise<void> {
+  const exit = deps.exit ?? process.exit;
+
+  deps.cron.stop();
+  deps.requestAbort();
+
+  const currentCycle = deps.getCurrentCycle();
+  if (currentCycle) {
+    deps.logger.info(
+      "waiting for the in-flight cycle to finish before exiting",
+    );
+
+    let timedOut = false;
+    const timeout = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, deps.shutdownGraceMs);
+    });
+
+    await Promise.race([currentCycle, timeout]);
+
+    if (timedOut) {
+      deps.logger.error(
+        { shutdownGraceMs: deps.shutdownGraceMs },
+        "in-flight cycle did not finish within the grace period — hard exit",
+      );
+      exit(1);
+      return;
+    }
+  }
+
+  await deps.pool.end();
+  deps.provider.destroy();
+  deps.logger.info("shutdown complete");
 }

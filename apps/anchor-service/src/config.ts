@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { merkleAnchorRegistryAddress } from "contracts-shared/deployments";
-import { isAddress } from "ethers";
+import { isAddress, isHexString } from "ethers";
 
 export interface AnchorConfig {
   databaseUrl: string;
@@ -15,13 +15,10 @@ export interface AnchorConfig {
   maxFeeGwei: number;
   txRetries: number;
   retryAlertThreshold: number;
-  /** `null` means "no cap" — anchor every pending record in a single batch. */
   maxBatchSize: number | null;
   shutdownGraceMs: number;
   logLevel: string;
 }
-
-const PRIVATE_KEY_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 /**
  * Resolves the `MerkleAnchorRegistry` address for the target chain: the
@@ -93,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
   const contractAddress = resolveContractAddress(chainId, env.CONTRACT_ADDRESS);
   const anchorPrivateKey = required(env, "ANCHOR_PRIVATE_KEY");
 
-  if (!PRIVATE_KEY_PATTERN.test(anchorPrivateKey)) {
+  if (!isHexString(anchorPrivateKey, 32)) {
     throw new Error(
       "ANCHOR_PRIVATE_KEY must be a 0x-prefixed 32-byte hex string",
     );
