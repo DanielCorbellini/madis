@@ -11,7 +11,8 @@ services:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      # - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ./db/setup-users.sql:/docker-entrypoint-initdb.d/03-setup-users.sql
     healthcheck:
       test:
         [
