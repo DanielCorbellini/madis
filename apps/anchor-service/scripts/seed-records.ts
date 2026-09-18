@@ -2,6 +2,7 @@ import { canonicalize } from "crypto-utils";
 import { type HDNodeWallet, Wallet } from "ethers";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Pool } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
@@ -10,10 +11,10 @@ import { createDbPool } from "service-runtime";
 // The standard, publicly-known Hardhat/Anvil test mnemonic — never used for
 // real funds, deterministic so re-running this script always signs as the
 // same address (0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266).
-const TEST_MNEMONIC =
+export const TEST_MNEMONIC =
   "test test test test test test test test test test test junk";
 
-type RecordType = "prescription" | "emr_encounter";
+export type RecordType = "prescription" | "emr_encounter";
 
 const DRUGS = [
   "Amoxicillin",
@@ -81,7 +82,7 @@ function parseCliArgs(argv: string[]): {
 }
 
 /** The only `admin_user` use in this service — explicitly test/fixture-only (§14). */
-async function truncateAll(adminDatabaseUrl: string): Promise<void> {
+export async function truncateAll(adminDatabaseUrl: string): Promise<void> {
   const admin = new Pool({ connectionString: adminDatabaseUrl });
   try {
     await admin.query(
@@ -99,7 +100,7 @@ async function truncateAll(adminDatabaseUrl: string): Promise<void> {
  * directly in the streamed COPY lines, mirroring `record-repository.ts`'s
  * `createEntity` convention for a brand-new entity.
  */
-async function seedRecords(
+export async function seedRecords(
   pool: Pool,
   wallet: HDNodeWallet,
   type: RecordType,
@@ -176,7 +177,9 @@ async function main(): Promise<void> {
   console.log(`Inserted ${count} ${type} record(s).`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
