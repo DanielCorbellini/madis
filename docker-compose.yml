@@ -64,10 +64,54 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
-      RPC_URL: ${RPC_URL:-http://host.docker.internal:8545}
+      # For now, this variables will be setted here, but in the future,
+      # The idea is using another mechanism to store the private key, such as KMS or HSM
+      # For now, to make things easier, we will store this informations in a .env file
+      RPC_URL: ${RPC_URL:-}
+      ANCHOR_CHAIN_ID: ${ANCHOR_CHAIN_ID:-31337}
       ANCHOR_CRON_SCHEDULE: ${ANCHOR_CRON_SCHEDULE:-0 */3 * * *}
       ANCHOR_PRIVATE_KEY: ${ANCHOR_PRIVATE_KEY:-}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+      WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-}
+      ANCHOR_CONFIRMATIONS: ${ANCHOR_CONFIRMATIONS:-3}
+      ANCHOR_CONFIRMATION_TIMEOUT_MS: ${ANCHOR_CONFIRMATION_TIMEOUT_MS:-300000}
+      ANCHOR_MAX_FEE_GWEI: ${ANCHOR_MAX_FEE_GWEI:-100}
+      ANCHOR_TX_RETRIES: ${ANCHOR_TX_RETRIES:-4}
+      ANCHOR_RETRY_ALERT_THRESHOLD: ${ANCHOR_RETRY_ALERT_THRESHOLD:-5}
+      ANCHOR_MAX_BATCH_SIZE: ${ANCHOR_MAX_BATCH_SIZE:-}
+      SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-600000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+  # Second anchor-service instance for a second network (D2's target scenario
+  # is one Sepolia + one Amoy instance running side by side). Uses its own
+  # _AMOY-suffixed env vars (see .env.example) so it doesn't collide with the
+  # `anchor-service` block above. Uncomment to run both networks at once.
+  # anchor-service-amoy:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/anchor-service/Dockerfile
+  #   container_name: anchor_service_amoy
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   environment:
+  #     NODE_ENV: ${NODE_ENV:-production}
+  #     DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
+  #     RPC_URL: ${RPC_URL_AMOY:-https://rpc-amoy.polygon.technology}
+  #     ANCHOR_CHAIN_ID: ${ANCHOR_CHAIN_ID_AMOY:-80002}
+  #     ANCHOR_CRON_SCHEDULE: ${ANCHOR_CRON_SCHEDULE:-0 */3 * * *}
+  #     ANCHOR_PRIVATE_KEY: ${ANCHOR_PRIVATE_KEY_AMOY:-}
+  #     CONTRACT_ADDRESS: ${CONTRACT_ADDRESS_AMOY:-}
+  #     WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-}
+  #     ANCHOR_CONFIRMATIONS: ${ANCHOR_CONFIRMATIONS_AMOY:-2}
+  #     ANCHOR_CONFIRMATION_TIMEOUT_MS: ${ANCHOR_CONFIRMATION_TIMEOUT_MS:-300000}
+  #     ANCHOR_MAX_FEE_GWEI: ${ANCHOR_MAX_FEE_GWEI:-100}
+  #     ANCHOR_TX_RETRIES: ${ANCHOR_TX_RETRIES:-4}
+  #     ANCHOR_RETRY_ALERT_THRESHOLD: ${ANCHOR_RETRY_ALERT_THRESHOLD:-5}
+  #     ANCHOR_MAX_BATCH_SIZE: ${ANCHOR_MAX_BATCH_SIZE:-}
+  #     SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-600000}
+  #     LOG_LEVEL: ${LOG_LEVEL:-info}
 
   monitor-service:
     build:

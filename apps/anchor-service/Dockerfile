@@ -23,5 +23,9 @@ COPY --from=builder /app/packages/ ./packages/
 COPY --from=builder /app/apps/anchor-service/ ./apps/anchor-service/
 
 ENV NODE_ENV=production
+# Tree-build memory mitigation (design doc §7) — buildMerkleTree materialises
+# ~2N tree nodes plus N proof arrays; raise further if Experiment 1 shows it's
+# still not enough at the batch sizes actually exercised.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 
 CMD ["pnpm", "--filter", "anchor-service", "start"]
