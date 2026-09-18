@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx scripts/seed-records.ts",
+    "bench:perf": "tsx bench/perf.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1"
   },
