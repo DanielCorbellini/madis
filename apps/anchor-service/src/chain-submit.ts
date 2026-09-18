@@ -1,8 +1,16 @@
-import type { MerkleAnchorRegistryLike } from "contracts-shared";
+import {
+  MerkleAnchorRegistry__factory,
+  type MerkleAnchorRegistryLike,
+} from "contracts-shared";
 import type { ContractTransactionResponse } from "ethers";
-import { isError, parseUnits } from "ethers";
+import { Interface, isError, parseUnits } from "ethers";
 import pRetry, { AbortError } from "p-retry";
 import type { ChainProvider } from "./chain.ts";
+
+/**
+ * Used only as a fallback decoder in `decodeRevertName`
+ */
+const contractInterface = new Interface(MerkleAnchorRegistry__factory.abi);
 
 /** The only field this module reads off a sent transaction — mirrors the
  * real ethers type instead of hand-rolling it, so it can't drift. */
@@ -56,11 +64,23 @@ export function computeBumpedFees(
 }
 
 /**
- * Decodes the name of a revert error if it's a CALL_EXCEPTION
+ * Decodes the name of a revert error if it's a CALL_EXCEPTION.
  */
 export function decodeRevertName(error: unknown): string | null {
-  if (isError(error, "CALL_EXCEPTION")) {
-    return error.revert?.name ?? null;
+  if (!isError(error, "CALL_EXCEPTION")) {
+    return null;
+  }
+
+  if (error.revert?.name) {
+    return error.revert.name;
+  }
+
+  if (error.data) {
+    try {
+      return contractInterface.parseError(error.data)?.name ?? null;
+    } catch {
+      return null;
+    }
   }
 
   return null;

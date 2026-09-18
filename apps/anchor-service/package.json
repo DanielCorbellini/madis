@@ -9,6 +9,7 @@
     "start": "tsx src/index.ts",
     "seed": "tsx scripts/seed-records.ts",
     "bench:perf": "tsx bench/perf.ts",
+    "bench:cross-chain": "tsx bench/cross-chain.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1"
   },

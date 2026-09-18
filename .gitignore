@@ -11,7 +11,14 @@ dist/
 .env.example
 
 # Documentation & TODOs
-docs/
+docs/*
+!docs/en
+!docs/pt-br
+docs/en/*
+!docs/en/ARCHITECTURE.md
+docs/pt-br/*
+!docs/pt-br/ARCHITECTURE.md
+!docs/ArchitectureV6.png
 TODO.md
 
 # Contracts ABI + generated TypeChain bindings
@@ -20,3 +27,6 @@ packages/contracts-shared/src/generated
 
 # Docker local overrides
 docker-compose.override.yml
+
+# Benchmark result dumps (apps/anchor-service/bench/perf.ts, bench/cross-chain.ts)
+apps/anchor-service/bench/results/
