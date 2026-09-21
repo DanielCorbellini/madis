@@ -9,9 +9,15 @@ import {
 const UNANCHORED_QUERY = `
   SELECT
       r.id,
+      r.entity_id,
+      r.record_type,
       r.payload,
+      r.version,
+      r.is_deleted,
+      r.replaces,
+      r.client_address,
       r.signature,
-      r.client_address
+      r.created_at
   FROM
       records r
   WHERE

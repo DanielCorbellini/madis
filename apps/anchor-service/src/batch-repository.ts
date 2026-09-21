@@ -185,9 +185,15 @@ export async function findInFlightBatches(db: Queryable): Promise<Batch[]> {
 const BATCH_RECORDS_QUERY = `
   SELECT
       r.id,
+      r.entity_id,
+      r.record_type,
       r.payload,
+      r.version,
+      r.is_deleted,
+      r.replaces,
+      r.client_address,
       r.signature,
-      r.client_address
+      r.created_at
   FROM
       anchor_records ar
       JOIN records r ON r.id = ar.record_id
