@@ -11,6 +11,8 @@ import {
 } from "../src/index.ts";
 import type { RecordPayload } from "../src/types.ts";
 
+const CREATED_AT = new Date("2026-01-01T00:00:00.000Z");
+
 describe("E2E Crypto Pipeline & Security Integration", () => {
   let authorizedClientA: HDNodeWallet;
   let authorizedClientB: HDNodeWallet;
@@ -73,8 +75,19 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     }
 
     // 3. Anchor Daemon: Computing leaves and building Merkle Tree
-    const leaves = signedPayloads.map((p) =>
-      computeLeafHash(p.id, p.data, p.signature),
+    const leaves = signedPayloads.map((p, idx) =>
+      computeLeafHash({
+        id: idx + 101,
+        entityId: idx + 1,
+        recordType: "prescription",
+        data: p.data,
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        clientAddress: p.clientAddress,
+        signature: p.signature,
+        createdAt: CREATED_AT,
+      }),
     );
 
     const { root, proofs } = buildMerkleTree(leaves);
@@ -112,8 +125,19 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
       }),
     );
 
-    const originalLeaves = batch.map((r) =>
-      computeLeafHash(r.id, r.data, r.signature),
+    const originalLeaves = batch.map((r, idx) =>
+      computeLeafHash({
+        id: idx + 1,
+        entityId: idx + 1,
+        recordType: "prescription",
+        data: r.data,
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        clientAddress: r.clientAddress,
+        signature: r.signature,
+        createdAt: CREATED_AT,
+      }),
     );
     const { root: officialRoot, proofs: originalProofs } =
       buildMerkleTree(originalLeaves);
@@ -130,8 +154,19 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     ];
 
     // 3. Monitor Daemon: Recalculates leaves from raw database records
-    const auditedLeaves = databaseRows.map((row) =>
-      computeLeafHash(row.id, row.data, row.signature),
+    const auditedLeaves = databaseRows.map((row, idx) =>
+      computeLeafHash({
+        id: idx + 1,
+        entityId: idx + 1,
+        recordType: "prescription",
+        data: row.data,
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        clientAddress: row.clientAddress,
+        signature: row.signature,
+        createdAt: CREATED_AT,
+      }),
     );
 
     // A. Reconstructing the Merkle Tree results in a DIVERGENT Root
@@ -157,14 +192,32 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     const originalSignature = await authorizedClientA.signMessage(
       canonicalize(originalData),
     );
-    const originalLeaf = computeLeafHash(
-      "ct-1",
-      originalData,
-      originalSignature,
-    );
+    const originalLeaf = computeLeafHash({
+      id: 1,
+      entityId: 1,
+      recordType: "prescription",
+      data: originalData,
+      version: 1,
+      isDeleted: false,
+      replaces: null,
+      clientAddress: authorizedClientA.address,
+      signature: originalSignature,
+      createdAt: CREATED_AT,
+    });
     const { root: anchoredRoot, proofs } = buildMerkleTree([
       originalLeaf,
-      computeLeafHash("dummy", { d: 1 }, "0x" + "1".repeat(130)),
+      computeLeafHash({
+        id: 2,
+        entityId: 2,
+        recordType: "prescription",
+        data: { d: 1 },
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        clientAddress: authorizedClientA.address,
+        signature: "0x" + "1".repeat(130),
+        createdAt: CREATED_AT,
+      }),
     ]);
 
     // 2. Attacker modifies data, signs with attackerWallet, and updates clientAddress in DB
@@ -186,11 +239,18 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
       .false;
 
     // B. Recalculated leaf FAILS against the immutable on-chain Merkle Root
-    const forgedLeaf = computeLeafHash(
-      forgedRow.id,
-      forgedRow.data,
-      forgedRow.signature,
-    );
+    const forgedLeaf = computeLeafHash({
+      id: 1,
+      entityId: 1,
+      recordType: "prescription",
+      data: forgedRow.data,
+      version: 1,
+      isDeleted: false,
+      replaces: null,
+      clientAddress: forgedRow.clientAddress,
+      signature: forgedRow.signature,
+      createdAt: CREATED_AT,
+    });
     const isProofValidOnAnchoredRoot = verifyMerkleProof(
       anchoredRoot,
       proofs[0],
@@ -230,8 +290,30 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     expect(isSigValid).to.be.true;
 
     // 4. Leaf hash remains 100% identical
-    const leafClient = computeLeafHash("doc-99", clientJson, signature);
-    const leafDb = computeLeafHash("doc-99", dbJson, signature);
+    const leafClient = computeLeafHash({
+      id: 99,
+      entityId: 1,
+      recordType: "prescription",
+      data: clientJson,
+      version: 1,
+      isDeleted: false,
+      replaces: null,
+      clientAddress: authorizedClientA.address,
+      signature,
+      createdAt: CREATED_AT,
+    });
+    const leafDb = computeLeafHash({
+      id: 99,
+      entityId: 1,
+      recordType: "prescription",
+      data: dbJson,
+      version: 1,
+      isDeleted: false,
+      replaces: null,
+      clientAddress: authorizedClientA.address,
+      signature,
+      createdAt: CREATED_AT,
+    });
     expect(leafClient).to.equal(leafDb);
   });
 });
