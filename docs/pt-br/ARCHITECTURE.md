@@ -162,9 +162,11 @@ $$\text{dataHash} = \text{Keccak256}(\text{toUtf8Bytes}(\text{canonicalize}(\tex
 
 ### 5.2. Cálculo da Folha Merkle ($L_i$)
 
-Para garantir resistência a ataques de colisão e interoperabilidade com Solidity e o padrão EVM ABI, a folha da árvore é calculada via `AbiCoder.defaultAbiCoder().encode(["string", "bytes32", "string"], [id, dataHash, signature])`:
+Para garantir resistência a ataques de colisão e interoperabilidade com Solidity e o padrão EVM ABI, a folha da árvore vincula todas as colunas da linha `records` — não apenas o payload e a assinatura — via `AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "string", "bytes32", "uint256", "bool", "uint256", "address", "string", "uint256"], [id, entityId, recordType, dataHash, version, isDeleted, replaces, clientAddress, signature, createdAt])`:
 
-$$L_i = \text{Keccak256}\Big(\text{abi.encode}\big([\text{"string"}, \text{"bytes32"}, \text{"string"}], [id_i, \text{dataHash}_i, \text{signature}_i]\big)\Big)$$
+$$L_i = \text{Keccak256}\Big(\text{abi.encode}\big([\text{"uint256"}, \text{"uint256"}, \text{"string"}, \text{"bytes32"}, \text{"uint256"}, \text{"bool"}, \text{"uint256"}, \text{"address"}, \text{"string"}, \text{"uint256"}], [id_i, \text{entityId}_i, \text{recordType}_i, \text{dataHash}_i, \text{version}_i, \text{isDeleted}_i, \text{replaces}_i, \text{clientAddress}_i, \text{signature}_i, \text{createdAt}_i]\big)\Big)$$
+
+Vincular os dez campos — e não apenas `id`/`dataHash`/`signature` — significa que adulterar qualquer coluna isolada após o registro ser ancorado (por exemplo, reescrever `version` ou `replaces` para esconder uma versão, ou `client_address` para forjar autoria) altera $L_i$ e, portanto, é detectado pela comparação de raiz do Monitor, da mesma forma que a adulteração do próprio payload. `replaces` é codificado como `0` quando `NULL` (uma linha original não tem versão anterior), e `clientAddress` é normalizado no formato checksum EIP-55 via `getAddress()` antes de ser codificado como `"address"`. Essa ordem de campos é permanente — corresponde à ordem de declaração das colunas de `records` em `db/schema.sql` — e não deve mudar depois que registros forem ancorados com base nela.
 
 ### 5.3. Árvore de Merkle com Pares Ordenados (_Sorted Pairs_)
 

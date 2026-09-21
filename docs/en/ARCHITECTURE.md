@@ -162,9 +162,11 @@ $$\text{dataHash} = \text{Keccak256}(\text{toUtf8Bytes}(\text{canonicalize}(\tex
 
 ### 5.2. Merkle Leaf Computation ($L_i$)
 
-To guarantee collision resistance and interoperability with Solidity and the EVM ABI standard, the tree's leaf is computed via `AbiCoder.defaultAbiCoder().encode(["string", "bytes32", "string"], [id, dataHash, signature])`:
+To guarantee collision resistance and interoperability with Solidity and the EVM ABI standard, the tree's leaf binds every column of the record's `records` row — not just its payload and signature — via `AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "string", "bytes32", "uint256", "bool", "uint256", "address", "string", "uint256"], [id, entityId, recordType, dataHash, version, isDeleted, replaces, clientAddress, signature, createdAt])`:
 
-$$L_i = \text{Keccak256}\Big(\text{abi.encode}\big([\text{"string"}, \text{"bytes32"}, \text{"string"}], [id_i, \text{dataHash}_i, \text{signature}_i]\big)\Big)$$
+$$L_i = \text{Keccak256}\Big(\text{abi.encode}\big([\text{"uint256"}, \text{"uint256"}, \text{"string"}, \text{"bytes32"}, \text{"uint256"}, \text{"bool"}, \text{"uint256"}, \text{"address"}, \text{"string"}, \text{"uint256"}], [id_i, \text{entityId}_i, \text{recordType}_i, \text{dataHash}_i, \text{version}_i, \text{isDeleted}_i, \text{replaces}_i, \text{clientAddress}_i, \text{signature}_i, \text{createdAt}_i]\big)\Big)$$
+
+Binding all ten fields — not just `id`/`dataHash`/`signature` — means tampering with any single column after a record is anchored (e.g. rewriting `version` or `replaces` to hide a version, or `client_address` to forge authorship) changes $L_i$ and is therefore caught by the Monitor's root comparison, the same way tampering with the payload itself is. `replaces` is encoded as `0` when `NULL` (an original row has no previous version), and `clientAddress` is EIP-55 checksum-normalized via `getAddress()` before encoding as `"address"`. This field order is permanent — it matches `db/schema.sql`'s `records` column declaration order — and must never change once records are anchored against it.
 
 ### 5.3. Merkle Tree with Sorted Pairs
 
