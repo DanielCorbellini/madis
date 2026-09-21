@@ -99,7 +99,18 @@ async function benchmarkSize(
     validated.map(
       (record): LeafEntry => ({
         recordId: record.id,
-        leaf: computeLeafHash(String(record.id), record.payload, record.signature),
+        leaf: computeLeafHash({
+          id: record.id,
+          entityId: record.entityId,
+          recordType: record.recordType,
+          data: record.payload,
+          version: record.version,
+          isDeleted: record.isDeleted,
+          replaces: record.replaces,
+          clientAddress: record.clientAddress,
+          signature: record.signature,
+          createdAt: record.createdAt,
+        }),
       }),
     ),
   );

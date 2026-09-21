@@ -43,10 +43,18 @@ export function validateRecord(
     };
   }
 
-  const leaf = computeLeafHash(
-    String(record.id),
-    record.payload,
-    record.signature,
-  );
+  const leaf = computeLeafHash({
+    id: record.id,
+    entityId: record.entityId,
+    recordType: record.recordType,
+    data: record.payload,
+    version: record.version,
+    isDeleted: record.isDeleted,
+    replaces: record.replaces,
+    clientAddress: record.clientAddress,
+    signature: record.signature,
+    createdAt: record.createdAt,
+  });
+
   return { recordId: record.id, ok: true, leaf };
 }

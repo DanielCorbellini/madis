@@ -97,12 +97,25 @@ function parseCliArgs(argv: string[]): { count: number; fresh: boolean } {
  * a `--fresh` run's leaves (and therefore its root) differ from a previous
  * run's, avoiding `RootAlreadyExists` on every network at once.
  */
+const SYNTHETIC_CREATED_AT = new Date("2026-01-01T00:00:00.000Z");
+
 function buildDataset(count: number, salt: string): { root: string; size: number } {
   const leaves: LeafEntry[] = [];
   for (let i = 0; i < count; i++) {
     leaves.push({
       recordId: i,
-      leaf: computeLeafHash(String(i), { i, salt }, "0xbench"),
+      leaf: computeLeafHash({
+        id: i,
+        entityId: i,
+        recordType: "prescription",
+        data: { i, salt },
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        clientAddress: `0x${"1".repeat(40)}`,
+        signature: "0xbench",
+        createdAt: SYNTHETIC_CREATED_AT,
+      }),
     });
   }
   const tree = buildAnchorTree(leaves);
