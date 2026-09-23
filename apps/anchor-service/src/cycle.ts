@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { Logger } from "service-runtime";
+import type { AnchorableRecord, Logger } from "service-runtime";
 import { recordSignatureMismatch as dbRecordSignatureMismatch } from "./alerts.ts";
 import {
   type AnchorEntry,
@@ -26,7 +26,6 @@ import {
   reconcileBatches,
   type ReconcileSummary,
 } from "./reconcile.ts";
-import type { AnchorableRecord } from "./record.ts";
 import { streamUnanchoredRecords as dbStreamUnanchoredRecords } from "./records-source.ts";
 import { snapshotMemory, timed } from "./timing.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
@@ -41,7 +40,7 @@ export interface CycleDeps {
     entries: AnchorEntry[];
   }): Promise<number>;
   findRootOnChain(root: string): Promise<BlockRef | null>;
-  submitRoot(root: string, size: number): Promise<SubmitResult>;
+  submitRoot(root: string, size: number, batchId: number): Promise<SubmitResult>;
   awaitConfirmation(
     txHash: string,
     confirmations: number,
@@ -191,7 +190,7 @@ export async function submitAndConfirmBatch(
    * If submission fails, mark the batch as failed and return the error.
    */
   try {
-    result = await deps.submitRoot(batch.merkleRoot, batch.size);
+    result = await deps.submitRoot(batch.merkleRoot, batch.size, batch.id);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
@@ -460,8 +459,8 @@ export function createCycleDeps(
     persistBatch: (batch) => dbPersistBatch(pool, batch),
     findRootOnChain: (root) =>
       chainFindRootOnChain(chain.contract, chain.provider, root),
-    submitRoot: (root, size) =>
-      chainSubmitRoot(chain.contract, chain.provider, root, size, {
+    submitRoot: (root, size, batchId) =>
+      chainSubmitRoot(chain.contract, chain.provider, root, size, batchId, {
         retries: config.txRetries,
         maxFeeGwei: config.maxFeeGwei,
       }),

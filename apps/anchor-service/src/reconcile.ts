@@ -1,7 +1,7 @@
 import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
-import type { Logger } from "service-runtime";
+import type { AnchorableRecord, Logger } from "service-runtime";
 import {
   type Batch,
   type BatchStatus,
@@ -23,7 +23,6 @@ import {
   type SubmitResult,
 } from "./chain-submit.ts";
 import type { ChainClient, ChainProvider } from "./chain.ts";
-import type { AnchorableRecord } from "./record.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 
 export interface ReconcileDeps {
@@ -33,7 +32,11 @@ export interface ReconcileDeps {
   markConfirmed(batchId: number, block: BlockRef): Promise<void>;
   markFailed(batchId: number, errorMessage: string): Promise<void>;
   findRootOnChain(root: string): Promise<BlockRef | null>;
-  submitRoot(root: string, size: number): Promise<SubmitResult>;
+  submitRoot(
+    root: string,
+    size: number,
+    batchId: number,
+  ): Promise<SubmitResult>;
   inspectTransaction(
     txHash: string,
     confirmations: number,
@@ -41,6 +44,7 @@ export interface ReconcileDeps {
   resendTransaction(
     root: string,
     size: number,
+    batchId: number,
     oldTxHash: string,
   ): Promise<Pick<ContractTransactionResponse, "hash">>;
 }
@@ -103,7 +107,7 @@ async function reconcilePending(
 ): Promise<void> {
   let result: SubmitResult;
   try {
-    result = await deps.submitRoot(batch.merkleRoot, batch.size);
+    result = await deps.submitRoot(batch.merkleRoot, batch.size, batch.id);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
@@ -184,6 +188,7 @@ async function reconcileSubmitted(
       const tx = await deps.resendTransaction(
         batch.merkleRoot,
         batch.size,
+        batch.id,
         batch.transactionHash,
       );
 
@@ -200,6 +205,7 @@ async function rebuildTreeRoot(
 ): Promise<string> {
   const entries: LeafEntry[] = [];
 
+  // Ver o que fazer, pois se passar endereço formatado errado só estoura um erro e nada é revertido (não tem try e catch)
   for await (const record of deps.streamBatchRecords(batchId)) {
     entries.push({
       recordId: record.id,
@@ -251,7 +257,7 @@ async function reconcileFailed(
 
   const nextRetryCount = batch.retryCount + 1;
   try {
-    const result = await deps.submitRoot(batch.merkleRoot, batch.size);
+    const result = await deps.submitRoot(batch.merkleRoot, batch.size, batch.id);
 
     if (result.status === "already-on-chain") {
       const block = await deps.findRootOnChain(batch.merkleRoot);
@@ -324,19 +330,20 @@ export function createReconcileDeps(
       dbMarkFailed(pool, batchId, errorMessage),
     findRootOnChain: (root) =>
       chainFindRootOnChain(chain.contract, provider, root),
-    submitRoot: (root, size) =>
-      chainSubmitRoot(chain.contract, provider, root, size, {
+    submitRoot: (root, size, batchId) =>
+      chainSubmitRoot(chain.contract, provider, root, size, batchId, {
         retries: options.retries,
         maxFeeGwei: options.maxFeeGwei,
       }),
     inspectTransaction: (txHash, confirmations) =>
       chainInspectTransaction(provider, txHash, confirmations),
-    resendTransaction: (root, size, oldTxHash) =>
+    resendTransaction: (root, size, batchId, oldTxHash) =>
       chainResendTransaction(
         chain.contract,
         provider,
         root,
         size,
+        batchId,
         oldTxHash,
         options.maxFeeGwei,
       ),

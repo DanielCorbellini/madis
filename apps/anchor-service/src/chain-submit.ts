@@ -105,6 +105,7 @@ export async function submitRoot(
   provider: Pick<ChainProvider, "getFeeData">,
   root: string,
   size: number,
+  batchId: number,
   options: SubmitRootOptions,
 ): Promise<SubmitResult> {
   let attempt = 0;
@@ -121,7 +122,7 @@ export async function submitRoot(
                 options.maxFeeGwei,
               );
 
-        return await contract.addMerkleRoot(root, size, overrides);
+        return await contract.addMerkleRoot(root, size, batchId, overrides);
       } catch (error) {
         const revertName = decodeRevertName(error);
 
@@ -171,6 +172,7 @@ export async function resendTransaction(
   provider: Pick<ChainProvider, "getTransaction" | "getFeeData">,
   root: string,
   size: number,
+  batchId: number,
   oldTxHash: string,
   maxFeeGwei: number,
 ): Promise<TransactionLike> {
@@ -188,5 +190,8 @@ export async function resendTransaction(
     maxFeeGwei,
   );
 
-  return contract.addMerkleRoot(root, size, { ...bumped, nonce: oldTx.nonce });
+  return contract.addMerkleRoot(root, size, batchId, {
+    ...bumped,
+    nonce: oldTx.nonce,
+  });
 }
