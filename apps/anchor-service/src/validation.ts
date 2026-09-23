@@ -3,7 +3,7 @@ import {
   isWhitelistedAddress,
   verifyClientSignature,
 } from "crypto-utils";
-import type { AnchorableRecord } from "./record.ts";
+import type { AnchorableRecord } from "service-runtime";
 
 export type ValidationResult =
   | { recordId: number; ok: true; leaf: string }

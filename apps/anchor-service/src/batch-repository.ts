@@ -2,12 +2,13 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Pool } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
-import { type Queryable, streamRows } from "service-runtime";
 import {
   type AnchorableRecord,
+  type Queryable,
   type RecordRow,
+  streamRows,
   toAnchorableRecord,
-} from "./record.ts";
+} from "service-runtime";
 
 export type BatchStatus = "pending" | "submitted" | "confirmed" | "failed";
 

@@ -1,10 +1,10 @@
 import type { Pool } from "pg";
-import { streamRows } from "service-runtime";
 import {
   type AnchorableRecord,
   type RecordRow,
+  streamRows,
   toAnchorableRecord,
-} from "./record.ts";
+} from "service-runtime";
 
 const UNANCHORED_QUERY = `
   SELECT
