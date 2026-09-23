@@ -10,6 +10,7 @@ export interface MerkleAnchorRegistryLike {
   addMerkleRoot(
     root: string,
     size: number,
+    batchId: number,
     overrides?: {
       maxFeePerGas: bigint;
       maxPriorityFeePerGas: bigint;
@@ -17,6 +18,7 @@ export interface MerkleAnchorRegistryLike {
     },
   ): Promise<Pick<ContractTransactionResponse, "hash">>;
   containsMerkleRoot(root: string): Promise<boolean>;
+  getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
   filters: { RootAdded(index?: unknown, root?: string): unknown };
   queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
   owner(): Promise<string>;
@@ -26,9 +28,13 @@ export function adaptMerkleAnchorRegistry(
   contract: MerkleAnchorRegistry,
 ): MerkleAnchorRegistryLike {
   return {
-    addMerkleRoot: (root, size, overrides) =>
-      contract.addMerkleRoot(root, size, overrides ?? {}),
+    addMerkleRoot: (root, size, batchId, overrides) =>
+      contract.addMerkleRoot(root, size, batchId, overrides ?? {}),
     containsMerkleRoot: (root) => contract.containsMerkleRoot(root),
+    getBatchInfo: async (batchId) => {
+      const [root, size] = await contract.getBatchInfo(batchId);
+      return { root, size: Number(size) };
+    },
     filters: contract.filters,
     queryFilter: (filter) => contract.queryFilter(filter as never),
     owner: () => contract.owner(),
