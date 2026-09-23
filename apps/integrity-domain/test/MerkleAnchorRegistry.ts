@@ -35,6 +35,7 @@ describe("MerkleAnchorRegistry", function () {
           MerkleAnchorRegistry.connect(nonOwner).addMerkleRoot(
             hashToBeAnchored,
             10,
+            1,
           ),
         ).to.be.revertedWithCustomError(
           MerkleAnchorRegistry,
@@ -46,16 +47,29 @@ describe("MerkleAnchorRegistry", function () {
     describe("Custom Errors", function () {
       it("should revert with ZeroRoot when root is zero", async function () {
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(ethers.ZeroHash, 10),
+          MerkleAnchorRegistry.addMerkleRoot(ethers.ZeroHash, 10, 1),
         ).to.be.revertedWithCustomError(MerkleAnchorRegistry, "ZeroRoot");
       });
 
       it("should revert with RootAlreadyExists when root already exists", async function () {
         const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 2);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 2, 1);
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10),
+          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10, 2),
+        ).to.be.revertedWithCustomError(
+          MerkleAnchorRegistry,
+          "RootAlreadyExists",
+        );
+      });
+
+      it("should revert with RootAlreadyExists when batch id was already used for a successful submission", async function () {
+        const hash1 = ethers.keccak256(toUtf8Bytes("testData1"));
+        const hash2 = ethers.keccak256(toUtf8Bytes("testData2"));
+
+        await MerkleAnchorRegistry.addMerkleRoot(hash1, 10, 1);
+        await expect(
+          MerkleAnchorRegistry.addMerkleRoot(hash2, 20, 1),
         ).to.be.revertedWithCustomError(
           MerkleAnchorRegistry,
           "RootAlreadyExists",
@@ -64,7 +78,7 @@ describe("MerkleAnchorRegistry", function () {
 
       it("should revert with ZeroBatchSize when batch size is zero", async function () {
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 0),
+          MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 0, 1),
         ).to.be.revertedWithCustomError(MerkleAnchorRegistry, "ZeroBatchSize");
       });
     });
@@ -76,7 +90,7 @@ describe("MerkleAnchorRegistry", function () {
         const index = await MerkleAnchorRegistry.getRootCount();
 
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, batchSize),
+          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, batchSize, 1),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
           .withArgs(index, hashToBeAnchored, batchSize);
@@ -93,13 +107,13 @@ describe("MerkleAnchorRegistry", function () {
         const batchSize2 = 20;
 
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, batchSize1),
+          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, batchSize1, 1),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
           .withArgs(0, hashToBeAnchored1, batchSize1);
 
         await expect(
-          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, batchSize2),
+          MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, batchSize2, 2),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
           .withArgs(1, hashToBeAnchored2, batchSize2);
@@ -111,8 +125,8 @@ describe("MerkleAnchorRegistry", function () {
         const batchSize1 = 10;
         const batchSize2 = 20;
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, batchSize1);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, batchSize2);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, batchSize1, 1);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, batchSize2, 2);
 
         const rootCount = await MerkleAnchorRegistry.getRootCount();
         expect(rootCount).to.equal(2);
@@ -145,7 +159,7 @@ describe("MerkleAnchorRegistry", function () {
   describe("containsMerkleRoot", function () {
     it("should return true for an existing merkle root", async function () {
       const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData"));
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10, 1);
       const containsRoot =
         await MerkleAnchorRegistry.containsMerkleRoot(hashToBeAnchored);
       expect(containsRoot).to.be.true;
@@ -176,8 +190,8 @@ describe("MerkleAnchorRegistry", function () {
         const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
         const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
 
         expect(await MerkleAnchorRegistry.getMerkleRootAt(0)).to.equal(
           hashToBeAnchored1,
@@ -208,8 +222,8 @@ describe("MerkleAnchorRegistry", function () {
         const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
         const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
 
         expect(
           await MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored1),
@@ -236,13 +250,54 @@ describe("MerkleAnchorRegistry", function () {
         const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
         const hashToBeAnchored3 = ethers.keccak256(toUtf8Bytes("testData3"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20, 3);
 
         expect(await MerkleAnchorRegistry.getLatestMerkleRoot()).to.equal(
           hashToBeAnchored3,
         );
+      });
+    });
+  });
+
+  describe("getBatchInfo", function () {
+    describe("Custom Errors", function () {
+      it("should revert with RootDoesNotExist when the batch id is not found", async function () {
+        await expect(
+          MerkleAnchorRegistry.getBatchInfo(999),
+        ).to.be.revertedWithCustomError(
+          MerkleAnchorRegistry,
+          "RootDoesNotExist",
+        );
+      });
+    });
+
+    describe("Function Call", function () {
+      it("should return the root and size for a known batch id", async function () {
+        const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData"));
+        const batchSize = 7;
+
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, batchSize, 42);
+
+        const [root, size] = await MerkleAnchorRegistry.getBatchInfo(42);
+        expect(root).to.equal(hashToBeAnchored);
+        expect(size).to.equal(batchSize);
+      });
+
+      it("should return independent info for multiple batch ids", async function () {
+        const hash1 = ethers.keccak256(toUtf8Bytes("testData1"));
+        const hash2 = ethers.keccak256(toUtf8Bytes("testData2"));
+
+        await MerkleAnchorRegistry.addMerkleRoot(hash1, 10, 1);
+        await MerkleAnchorRegistry.addMerkleRoot(hash2, 20, 2);
+
+        const info1 = await MerkleAnchorRegistry.getBatchInfo(1);
+        const info2 = await MerkleAnchorRegistry.getBatchInfo(2);
+        expect(info1.root).to.equal(hash1);
+        expect(info1.size).to.equal(10);
+        expect(info2.root).to.equal(hash2);
+        expect(info2.size).to.equal(20);
       });
     });
   });
@@ -254,8 +309,8 @@ describe("MerkleAnchorRegistry", function () {
       const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
       const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
 
       expect(await MerkleAnchorRegistry.getRootCount()).to.equal(2);
     });
@@ -274,16 +329,16 @@ describe("MerkleAnchorRegistry", function () {
       const hashToBeAnchored9 = ethers.keccak256(toUtf8Bytes("testData9"));
       const hashToBeAnchored10 = ethers.keccak256(toUtf8Bytes("testData10"));
 
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored4, 20);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored5, 30);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored6, 31);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored7, 43);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored8, 21);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored9, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored10, 5);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20, 3);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored4, 20, 4);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored5, 30, 5);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored6, 31, 6);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored7, 43, 7);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored8, 21, 8);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored9, 10, 9);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored10, 5, 10);
 
       expect(
         await MerkleAnchorRegistry.getMerkleRootsPaged(5, 5),
@@ -306,8 +361,8 @@ describe("MerkleAnchorRegistry", function () {
       const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
       const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
 
       expect(
         await MerkleAnchorRegistry.getMerkleRootsPaged(5, 5),
@@ -318,8 +373,8 @@ describe("MerkleAnchorRegistry", function () {
       const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
       const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
 
       expect(
         await MerkleAnchorRegistry.getMerkleRootsPaged(0, 0),
@@ -331,9 +386,9 @@ describe("MerkleAnchorRegistry", function () {
       const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
       const hashToBeAnchored3 = ethers.keccak256(toUtf8Bytes("testData3"));
 
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15);
-      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
+      await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored3, 20, 3);
 
       expect(
         await MerkleAnchorRegistry.getMerkleRootsPaged(1, 5),
@@ -347,7 +402,7 @@ describe("MerkleAnchorRegistry", function () {
         const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData"));
         const hashToBeVerified = ethers.keccak256(toUtf8Bytes("testData2"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 10, 1);
         await expect(
           MerkleAnchorRegistry.verifyMerkleProof(
             hashToBeVerified,
@@ -389,7 +444,7 @@ describe("MerkleAnchorRegistry", function () {
       it("should return true for a valid merkle proof", async function () {
         const { tree, leaves } = buildTestTree();
 
-        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length);
+        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length, 1);
 
         const proof = tree.getProof(0);
         const leafHash = computeLeafHash(leaves[0][0]);
@@ -406,7 +461,7 @@ describe("MerkleAnchorRegistry", function () {
       it("should return false for a wrong leaf", async function () {
         const { tree, leaves } = buildTestTree();
 
-        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length);
+        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length, 1);
 
         const proof = tree.getProof(0);
         // Use a leaf that does NOT belong to the tree
@@ -426,7 +481,7 @@ describe("MerkleAnchorRegistry", function () {
       it("should return false for a corrupted proof", async function () {
         const { tree, leaves } = buildTestTree();
 
-        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length);
+        await MerkleAnchorRegistry.addMerkleRoot(tree.root, leaves.length, 1);
 
         const proof = tree.getProof(0);
         const leafHash = computeLeafHash(leaves[0][0]);

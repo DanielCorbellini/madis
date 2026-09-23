@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /**
  * @dev Contract responsible for storing and verifying Merkle Roots on the blockchain.
@@ -17,8 +17,14 @@ contract MerkleAnchorRegistry is Ownable {
     error IndexOutOfBounds(uint256 index, uint256 total);
     error NoRootsStored();
 
+    struct BatchInfo {
+        bytes32 root;
+        uint256 size;
+    }
+
     bytes32[] private merkleRoots;
     mapping(bytes32 => uint256) private rootToIndexPlusOne;
+    mapping(uint256 => BatchInfo) private batchInfo;
 
     event RootAdded(
         uint256 indexed index,
@@ -33,18 +39,26 @@ contract MerkleAnchorRegistry is Ownable {
 
     /**
      * @dev Anchors a new Merkle Root to the immutable on-chain history.
+     * @param _root The Merkle Root to be anchored.
+     * @param _batchSize The size of the batch associated with the Merkle Root.
+     * @param _batchId The unique identifier for the batch associated with the Merkle Root.
      */
     function addMerkleRoot(
         bytes32 _root,
-        uint256 _batchSize
+        uint256 _batchSize,
+        uint256 _batchId
     ) external onlyOwner returns (uint256) {
         if (_root == bytes32(0)) revert ZeroRoot();
         if (_batchSize == 0) revert ZeroBatchSize();
         if (rootToIndexPlusOne[_root] != 0) revert RootAlreadyExists(_root);
+        if (batchInfo[_batchId].root != bytes32(0)) {
+            revert RootAlreadyExists(batchInfo[_batchId].root);
+        }
 
         uint256 index = merkleRoots.length;
         merkleRoots.push(_root);
         rootToIndexPlusOne[_root] = index + 1;
+        batchInfo[_batchId] = BatchInfo({ root: _root, size: _batchSize });
 
         emit RootAdded(index, _root, _batchSize);
 
@@ -85,6 +99,17 @@ contract MerkleAnchorRegistry is Ownable {
     function getLatestMerkleRoot() external view returns (bytes32) {
         if (merkleRoots.length == 0) revert NoRootsStored();
         return merkleRoots[merkleRoots.length - 1];
+    }
+
+    /**
+     * @dev Returns the Merkle Root and batch size anchored for a given batch ID.
+     */
+    function getBatchInfo(
+        uint256 _batchId
+    ) external view returns (bytes32 root, uint256 size) {
+        BatchInfo memory info = batchInfo[_batchId];
+        if (info.root == bytes32(0)) revert RootDoesNotExist(info.root);
+        return (info.root, info.size);
     }
 
     /**
