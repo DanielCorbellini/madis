@@ -353,6 +353,9 @@ importers:
       contracts-shared:
         specifier: workspace:*
         version: link:../../packages/contracts-shared
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
       crypto-utils:
         specifier: workspace:*
         version: link:../../packages/crypto-utils
@@ -362,34 +365,31 @@ importers:
       ethers:
         specifier: ^6.17.0
         version: 6.17.0
-      node-cron:
-        specifier: ^3.0.3
-        version: 3.0.3
       p-retry:
         specifier: ^6.2.1
         version: 6.2.1
       pg:
         specifier: ^8.13.1
         version: 8.22.0
-      pino:
-        specifier: ^9.6.0
-        version: 9.14.0
+      service-runtime:
+        specifier: workspace:*
+        version: link:../../packages/service-runtime
       tsx:
         specifier: ^4.19.2
         version: 4.23.1
     devDependencies:
+      '@types/chai':
+        specifier: ^5.2.3
+        version: 5.2.3
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
-      '@types/node-cron':
-        specifier: ^3.0.11
-        version: 3.0.11
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.3
-      pino-pretty:
-        specifier: ^13.0.0
-        version: 13.1.3
+      chai:
+        specifier: ^6.2.2
+        version: 6.2.2
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -998,9 +998,6 @@ packages:
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
 
-  '@types/node-cron@3.0.11':
-    resolution: {integrity: sha512-0ikrnug3/IyneSHqCBeslAhlK2aBfYek1fGo4bP4QnZPmiqSGRK+Oy7ZMisLWkesffJvQ1cqAcBnJC+8+nxIAg==}
-
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
@@ -1547,10 +1544,6 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  node-cron@3.0.3:
-    resolution: {integrity: sha512-dOal67//nohNgYWb+nWmg5dkFdIwDm8EpeGYMekPMrngV3637lqnX0lbUcCtgibHTz6SEz7DAIjKvKDFYCnO1A==}
-    engines: {node: '>=6.0.0'}
-
   obuf@1.1.2:
     resolution: {integrity: sha512-PX1wu0AmAdPqOL1mWhqmlOd8kOIZQwGZw6rh7uby9fTc5lhaOWFLX3I6R1hrF9k3zUY40e6igsLGkDXK92LJNg==}
 
@@ -1916,11 +1909,6 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
-
-  uuid@8.3.2:
-    resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-    hasBin: true
 
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
@@ -2622,8 +2610,6 @@ snapshots:
 
   '@types/ms@2.1.0': {}
 
-  '@types/node-cron@3.0.11': {}
-
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
@@ -3209,10 +3195,6 @@ snapshots:
       split2: 3.2.2
       through2: 4.0.2
 
-  node-cron@3.0.3:
-    dependencies:
-      uuid: 8.3.2
-
   obuf@1.1.2: {}
 
   on-exit-leak-free@2.1.2: {}
@@ -3551,8 +3533,6 @@ snapshots:
   universalify@0.1.2: {}
 
   util-deprecate@1.0.2: {}
-
-  uuid@8.3.2: {}
 
   uuid@9.0.1: {}
 
