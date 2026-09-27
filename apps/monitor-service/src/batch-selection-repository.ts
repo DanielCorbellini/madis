@@ -1,7 +1,7 @@
 import type { Queryable } from "service-runtime";
 
 /**
- * Every batch this cycle must audit — the full-rescan policy (spec §3):
+ * Every batch this cycle must audit, the full-rescan policy:
  * every confirmed batch, every cycle, no filtering, no `LIMIT`, no stored
  * progress state of any kind.
  */
@@ -14,7 +14,7 @@ export async function findConfirmedBatchIds(db: Queryable): Promise<number[]> {
 
 /**
  * Every batch this cycle must individually verify still exists on-chain
- * (spec §3.1) — a `'submitted'` batch is the one status counted by the
+ * a `'submitted'` batch is the one status counted by the
  * root count check (below) that isn't already covered by the confirmed
  * rescan, so it's the only status a padding attack could otherwise use.
  */
@@ -27,7 +27,7 @@ export async function findSubmittedBatchIds(db: Queryable): Promise<number[]> {
 
 /**
  * How many batches Postgres currently considers on-chain-or-on-the-way —
- * the denominator the root count check (spec §3.1) compares against the
+ * the denominator the root count check compares against the
  * contract's own `getRootCount()`. `'confirmed'` and `'submitted'` are
  * the only two statuses a genuinely-anchored batch can be in.
  */
