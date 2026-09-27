@@ -17,10 +17,15 @@ export interface AuditDeps {
   getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
   countAnchoredRecords(batchId: number): Promise<number>;
   streamAnchoredRecords(batchId: number): AsyncGenerator<AnchoredRecordEntry>;
-  recordRootDivergence(batchId: number, details: string): Promise<boolean>;
+  recordRootDivergence(
+    batchId: number,
+    expectedRoot: string | null,
+    details: string,
+  ): Promise<boolean>;
   recordTampered(
     batchId: number,
     recordId: number,
+    expectedRoot: string,
     details: string,
   ): Promise<boolean>;
 }
@@ -55,7 +60,7 @@ export async function auditBatch(
   if (!anchorCountCheck.complete) {
     const message = `batch ${batchId}: anchor_records count ${anchoredCount} does not match on-chain size ${size} — a pinned record was likely deleted`;
     logger.error({ batchId, onChainSize: size, anchoredCount }, message);
-    await deps.recordRootDivergence(batchId, message);
+    await deps.recordRootDivergence(batchId, root, message);
   }
 
   let recordsChecked = 0;
@@ -69,7 +74,7 @@ export async function auditBatch(
       tamperedRecordIds.push(record.id);
       const message = `record ${record.id} in batch ${batchId}: recomputed leaf does not verify against its stored proof and the on-chain root — data was likely tampered with`;
       logger.error({ batchId, recordId: record.id }, message);
-      await deps.recordTampered(batchId, record.id, message);
+      await deps.recordTampered(batchId, record.id, root, message);
     }
   }
 
@@ -93,9 +98,9 @@ export function createAuditDeps(
     getBatchInfo: (batchId) => contract.getBatchInfo(batchId),
     countAnchoredRecords: (batchId) => dbCountAnchoredRecords(pool, batchId),
     streamAnchoredRecords: (batchId) => dbStreamAnchoredRecords(pool, batchId),
-    recordRootDivergence: (batchId, details) =>
-      dbRecordRootDivergence(pool, batchId, details),
-    recordTampered: (batchId, recordId, details) =>
-      dbRecordTampered(pool, batchId, recordId, details),
+    recordRootDivergence: (batchId, expectedRoot, details) =>
+      dbRecordRootDivergence(pool, batchId, expectedRoot, details),
+    recordTampered: (batchId, recordId, expectedRoot, details) =>
+      dbRecordTampered(pool, batchId, recordId, expectedRoot, details),
   };
 }
