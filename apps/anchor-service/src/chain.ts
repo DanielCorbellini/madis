@@ -56,38 +56,6 @@ export function createChainClient(config: ChainClientConfig): ChainClient {
 }
 
 /**
- * Asserts that the network returned by the provider matches the expected chain ID.
- * Throws an error if the chain IDs do not match.
- */
-export async function assertNetworkMatches(
-  provider: Pick<ChainProvider, "getNetwork">,
-  expectedChainId: number,
-): Promise<void> {
-  const network = await provider.getNetwork();
-
-  if (network.chainId !== BigInt(expectedChainId)) {
-    throw new Error(
-      `RPC_URL points at chain ${network.chainId}, expected ${expectedChainId} (ANCHOR_CHAIN_ID)`,
-    );
-  }
-}
-
-/**
- * Asserts that a contract is deployed at the given address by checking if the bytecode is non-empty.
- * Throws an error if the contract is not deployed.
- */
-export async function assertContractDeployed(
-  provider: Pick<ChainProvider, "getCode">,
-  address: string,
-): Promise<void> {
-  const code = await provider.getCode(address);
-
-  if (code === "0x") {
-    throw new Error(`No contract bytecode found at ${address}`);
-  }
-}
-
-/**
  * Asserts that the given wallet address is the owner of the contract.
  * Throws an error if the wallet is not the owner.
  */

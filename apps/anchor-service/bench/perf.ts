@@ -3,11 +3,14 @@ import { Wallet } from "ethers";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Pool } from "pg";
-import { createDbPool } from "service-runtime";
+import {
+  type AnchorableRecord,
+  createDbPool,
+  timed,
+  trackPeakMemory,
+} from "service-runtime";
 import { seedRecords, TEST_MNEMONIC, truncateAll } from "../scripts/seed-records.ts";
-import type { AnchorableRecord } from "../src/record.ts";
 import { streamUnanchoredRecords } from "../src/records-source.ts";
-import { timed, trackPeakMemory } from "../src/timing.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
 import { writeResults } from "./report.ts";
 

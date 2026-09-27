@@ -1,6 +1,7 @@
+import { resolveContractAddress } from "contracts-shared";
 import "dotenv/config";
-import { merkleAnchorRegistryAddress } from "contracts-shared/deployments";
 import { isAddress, isHexString } from "ethers";
+import { integerEnv, requiredEnv } from "service-runtime";
 
 export interface AnchorConfig {
   databaseUrl: string;
@@ -20,65 +21,10 @@ export interface AnchorConfig {
   logLevel: string;
 }
 
-/**
- * Resolves the `MerkleAnchorRegistry` address for the target chain: the
- * `CONTRACT_ADDRESS` env override wins (useful for local forks), otherwise the
- * committed deployment registered in `contracts-shared` for that chain id.
- */
-export function resolveContractAddress(
-  chainId: number,
-  override: string | undefined,
-  lookup: (chainId: number) => string | undefined = merkleAnchorRegistryAddress,
-): string {
-  const address = override?.trim() || lookup(chainId);
-
-  if (!address) {
-    throw new Error(
-      `No contract address for chain ${chainId}: set CONTRACT_ADDRESS or register a deployment in contracts-shared`,
-    );
-  }
-
-  if (!isAddress(address)) {
-    throw new Error(`Contract address is not a valid address: ${address}`);
-  }
-  return address;
-}
-
-function required(env: NodeJS.ProcessEnv, key: string): string {
-  const value = env[key];
-
-  if (!value) {
-    throw new Error(`${key} environment variable is required`);
-  }
-
-  return value;
-}
-
-function integer(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  fallback: number,
-  { min }: { min: number },
-): number {
-  const raw = env[key];
-
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-
-  const value = Number(raw);
-
-  if (!Number.isInteger(value) || value < min) {
-    throw new Error(`${key} must be an integer >= ${min}, received: ${raw}`);
-  }
-
-  return value;
-}
-
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
-  const databaseUrl = required(env, "DATABASE_URL");
-  const rpcUrl = required(env, "RPC_URL");
-  const chainIdRaw = required(env, "ANCHOR_CHAIN_ID");
+  const databaseUrl = requiredEnv(env, "DATABASE_URL");
+  const rpcUrl = requiredEnv(env, "RPC_URL");
+  const chainIdRaw = requiredEnv(env, "ANCHOR_CHAIN_ID");
   const chainId = Number(chainIdRaw);
 
   if (!Number.isInteger(chainId) || chainId <= 0) {
@@ -88,7 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
   }
 
   const contractAddress = resolveContractAddress(chainId, env.CONTRACT_ADDRESS);
-  const anchorPrivateKey = required(env, "ANCHOR_PRIVATE_KEY");
+  const anchorPrivateKey = requiredEnv(env, "ANCHOR_PRIVATE_KEY");
 
   if (!isHexString(anchorPrivateKey, 32)) {
     throw new Error(
@@ -130,20 +76,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
     anchorPrivateKey,
     whitelistedAddresses,
     cronSchedule: env.ANCHOR_CRON_SCHEDULE || "0 */3 * * *",
-    confirmations: integer(env, "ANCHOR_CONFIRMATIONS", 3, { min: 0 }),
-    confirmationTimeoutMs: integer(
+    confirmations: integerEnv(env, "ANCHOR_CONFIRMATIONS", 3, { min: 0 }),
+    confirmationTimeoutMs: integerEnv(
       env,
       "ANCHOR_CONFIRMATION_TIMEOUT_MS",
       300_000,
       { min: 0 },
     ),
-    maxFeeGwei: integer(env, "ANCHOR_MAX_FEE_GWEI", 100, { min: 1 }),
-    txRetries: integer(env, "ANCHOR_TX_RETRIES", 4, { min: 0 }),
-    retryAlertThreshold: integer(env, "ANCHOR_RETRY_ALERT_THRESHOLD", 5, {
+    maxFeeGwei: integerEnv(env, "ANCHOR_MAX_FEE_GWEI", 100, { min: 1 }),
+    txRetries: integerEnv(env, "ANCHOR_TX_RETRIES", 4, { min: 0 }),
+    retryAlertThreshold: integerEnv(env, "ANCHOR_RETRY_ALERT_THRESHOLD", 5, {
       min: 1,
     }),
     maxBatchSize,
-    shutdownGraceMs: integer(env, "SHUTDOWN_GRACE_MS", 600_000, { min: 0 }),
+    shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 600_000, { min: 0 }),
     logLevel: env.LOG_LEVEL || "info",
   };
 }

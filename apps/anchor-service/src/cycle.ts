@@ -1,5 +1,10 @@
 import type { Pool } from "pg";
-import type { AnchorableRecord, Logger } from "service-runtime";
+import {
+  type AnchorableRecord,
+  type Logger,
+  snapshotMemory,
+  timed,
+} from "service-runtime";
 import { recordSignatureMismatch as dbRecordSignatureMismatch } from "./alerts.ts";
 import {
   type AnchorEntry,
@@ -27,7 +32,6 @@ import {
   type ReconcileSummary,
 } from "./reconcile.ts";
 import { streamUnanchoredRecords as dbStreamUnanchoredRecords } from "./records-source.ts";
-import { snapshotMemory, timed } from "./timing.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 import { validateRecord } from "./validation.ts";
 
@@ -40,7 +44,11 @@ export interface CycleDeps {
     entries: AnchorEntry[];
   }): Promise<number>;
   findRootOnChain(root: string): Promise<BlockRef | null>;
-  submitRoot(root: string, size: number, batchId: number): Promise<SubmitResult>;
+  submitRoot(
+    root: string,
+    size: number,
+    batchId: number,
+  ): Promise<SubmitResult>;
   awaitConfirmation(
     txHash: string,
     confirmations: number,

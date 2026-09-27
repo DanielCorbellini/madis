@@ -2,12 +2,8 @@ import { computeLeafHash } from "crypto-utils";
 import { formatEther } from "ethers";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  assertContractDeployed,
-  assertNetworkMatches,
-  assertWalletIsOwner,
-  createChainClient,
-} from "../src/chain.ts";
+import { assertContractDeployed, assertNetworkMatches } from "service-runtime";
+import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
 import { submitRoot } from "../src/chain-submit.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
 import { writeResults } from "./report.ts";
@@ -180,10 +176,21 @@ async function benchmarkChain(
     await assertWalletIsOwner(chain.contract, chain.wallet.address);
 
     const submitStart = performance.now();
-    const result = await submitRoot(chain.contract, chain.provider, root, size, {
-      retries: SUBMIT_RETRIES,
-      maxFeeGwei: SUBMIT_MAX_FEE_GWEI,
-    });
+    // Date.now() is unique per script invocation (this function is called once per
+    // chain per run, sharing the same root/size) — good enough to avoid colliding
+    // with a stale batchId from an earlier failed run's addMerkleRoot call.
+    const batchId = Date.now();
+    const result = await submitRoot(
+      chain.contract,
+      chain.provider,
+      root,
+      size,
+      batchId,
+      {
+        retries: SUBMIT_RETRIES,
+        maxFeeGwei: SUBMIT_MAX_FEE_GWEI,
+      },
+    );
 
     if (result.status === "already-on-chain") {
       console.log(`${chainConfig.name}: already anchored, skipped`);
