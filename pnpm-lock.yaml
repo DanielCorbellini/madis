@@ -434,6 +434,9 @@ importers:
 
   packages/service-runtime:
     dependencies:
+      croner:
+        specifier: ^10.0.1
+        version: 10.0.1
       pg:
         specifier: ^8.13.1
         version: 8.22.0
