@@ -19,6 +19,7 @@ export interface MerkleAnchorRegistryLike {
   ): Promise<Pick<ContractTransactionResponse, "hash">>;
   containsMerkleRoot(root: string): Promise<boolean>;
   getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
+  getRootCount(): Promise<number>;
   filters: { RootAdded(index?: unknown, root?: string): unknown };
   queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
   owner(): Promise<string>;
@@ -35,6 +36,7 @@ export function adaptMerkleAnchorRegistry(
       const [root, size] = await contract.getBatchInfo(batchId);
       return { root, size: Number(size) };
     },
+    getRootCount: async () => Number(await contract.getRootCount()),
     filters: contract.filters,
     queryFilter: (filter) => contract.queryFilter(filter as never),
     owner: () => contract.owner(),
