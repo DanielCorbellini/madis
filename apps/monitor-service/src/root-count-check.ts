@@ -1,7 +1,7 @@
 export interface RootCountCheck {
   onChainRootCount: number;
   trackedBatchCount: number;
-  complete: boolean;
+  matches: boolean;
 }
 
 /**
@@ -22,6 +22,6 @@ export function checkRootCount(
   return {
     onChainRootCount,
     trackedBatchCount,
-    complete: onChainRootCount === trackedBatchCount,
+    matches: onChainRootCount === trackedBatchCount,
   };
 }
