@@ -5,7 +5,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "pnpm -r --stream --no-bail --if-present test",
+    "test": "pnpm -r --stream --no-bail --workspace-concurrency=1 --if-present test",
     "test:parallel": "pnpm -r --parallel --stream --no-bail --if-present test"
   },
   "keywords": [],

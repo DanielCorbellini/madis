@@ -127,5 +127,10 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
       RPC_URL: ${RPC_URL:-http://host.docker.internal:8545}
+      ANCHOR_CHAIN_ID: ${ANCHOR_CHAIN_ID:-31337}
       MONITOR_CRON_SCHEDULE: ${MONITOR_CRON_SCHEDULE:-*/5 * * * *}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
+      MONITOR_RPC_RETRIES: ${MONITOR_RPC_RETRIES:-4}
+      MONITOR_SUBMITTED_STALE_MS: ${MONITOR_SUBMITTED_STALE_MS:-86400000}
+      SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-30000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
