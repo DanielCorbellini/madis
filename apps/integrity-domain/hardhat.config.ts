@@ -42,6 +42,12 @@ export default defineConfig({
       url: configVariable("POLYGON_AMOY_RPC_URL"),
       accounts: [configVariable("POLYGON_AMOY_PRIVATE_KEY")],
     },
+    arbitrumSepolia: {
+      type: "http",
+      chainType: "generic",
+      url: configVariable("ARBITRUM_SEPOLIA_RPC_URL"),
+      accounts: [configVariable("ARBITRUM_SEPOLIA_PRIVATE_KEY")],
+    },
   },
   tasks: [buildAndExportTask, exportDeploymentsTask],
 });
