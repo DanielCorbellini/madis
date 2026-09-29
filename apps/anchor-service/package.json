@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "seed": "tsx scripts/seed-records.ts",
+    "tamper": "tsx scripts/tamper.ts",
     "bench:perf": "tsx bench/perf.ts",
     "bench:cross-chain": "tsx bench/cross-chain.ts",
     "typecheck": "tsc --noEmit",

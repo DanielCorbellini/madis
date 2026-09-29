@@ -18,39 +18,57 @@
 --                   exactly the scenario the system must detect.
 --                2. Maintenance — migrations, fixes, DDL.
 --
--- To run this script, connect as superuser (e.g., postgres).
--- Replace passwords before executing.
+-- To run this script, connect as superuser (e.g., postgres). Passwords below
+-- are plain, local-development-only defaults (this project has no production
+-- deployment target — see README.md)
 -- =============================================================================
-
 -- ---------------------
 -- 1. Create users
 -- ---------------------
+CREATE USER app_user
+WITH
+    PASSWORD 'apppassword';
 
-CREATE USER app_user WITH PASSWORD 'CHANGE_APP_PASSWORD';
-CREATE USER admin_user WITH PASSWORD 'CHANGE_ADMIN_PASSWORD';
+CREATE USER admin_user
+WITH
+    PASSWORD 'adminpassword';
 
 -- ---------------------
 -- 2. app_user — restricted access (append-only for records)
 -- ---------------------
-
 -- records: INSERT and SELECT only (append-only)
-GRANT SELECT, INSERT ON "records" TO app_user;
+GRANT
+SELECT
+,
+    INSERT ON "records" TO app_user;
 
 -- batches: INSERT, SELECT and UPDATE (needs to transition status)
-GRANT SELECT, INSERT, UPDATE ON "batches" TO app_user;
+GRANT
+SELECT
+,
+    INSERT,
+UPDATE ON "batches" TO app_user;
 
 -- anchor_records: INSERT and SELECT only
-GRANT SELECT, INSERT ON "anchor_records" TO app_user;
+GRANT
+SELECT
+,
+    INSERT ON "anchor_records" TO app_user;
 
 -- integrity_alerts: INSERT and SELECT only
-GRANT SELECT, INSERT ON "integrity_alerts" TO app_user;
+GRANT
+SELECT
+,
+    INSERT ON "integrity_alerts" TO app_user;
 
 -- Sequences: required for BIGSERIAL INSERT to work
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+GRANT USAGE,
+SELECT
+    ON ALL SEQUENCES IN SCHEMA public TO app_user;
 
 -- ---------------------
 -- 3. admin_user — full access (tamper testing + maintenance)
 -- ---------------------
-
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO admin_user;
+
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO admin_user;
