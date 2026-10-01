@@ -37,14 +37,19 @@ export async function recordRoutes(
   const server = app.withTypeProvider<ZodTypeProvider>();
 
   async function assertAuthorizedAndSigned(input: {
+    recordType: string;
     data: Record<string, unknown>;
     clientAddress: string;
     signature: string;
+    version: number;
+    isDeleted: boolean;
+    replaces: number | null;
+    entityId: number | null;
   }): Promise<void> {
     if (!(await isClientAuthorized(input.clientAddress))) {
       throw new AddressNotAuthorizedError();
     }
-    if (!verifyClientSignature({ id: input.clientAddress, ...input })) {
+    if (!verifyClientSignature(input)) {
       throw new SignatureInvalidError();
     }
   }
@@ -59,9 +64,14 @@ export async function recordRoutes(
     isDeleted: boolean;
   }) {
     await assertAuthorizedAndSigned({
+      recordType,
       data: input.data,
       clientAddress: input.clientAddress,
       signature: input.signature,
+      version: input.expectedVersion + 1,
+      isDeleted: input.isDeleted,
+      replaces: input.replaces,
+      entityId: input.entityId,
     });
 
     const current = await repository.findLatest(recordType, input.entityId);
@@ -175,7 +185,16 @@ export async function recordRoutes(
     },
     async (request, reply) => {
       const { data, clientAddress, signature } = request.body;
-      await assertAuthorizedAndSigned({ data, clientAddress, signature });
+      await assertAuthorizedAndSigned({
+        recordType,
+        data,
+        clientAddress,
+        signature,
+        version: 1,
+        isDeleted: false,
+        replaces: null,
+        entityId: null,
+      });
 
       const record = await repository.createEntity({
         recordType,
