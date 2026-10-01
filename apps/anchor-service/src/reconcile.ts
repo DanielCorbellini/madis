@@ -2,6 +2,7 @@ import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
 import type { AnchorableRecord, Logger } from "service-runtime";
+import { recordHashFailure as dbRecordHashFailure } from "./alerts.ts";
 import {
   type Batch,
   type BatchStatus,
@@ -47,6 +48,11 @@ export interface ReconcileDeps {
     batchId: number,
     oldTxHash: string,
   ): Promise<Pick<ContractTransactionResponse, "hash">>;
+  recordHashFailure(
+    recordId: number,
+    batchId: number,
+    details: string,
+  ): Promise<boolean>;
 }
 
 export interface ReconcileSummary {
@@ -58,6 +64,24 @@ export interface ReconcileSummary {
 export interface ReconcileOptions {
   confirmations: number;
   retryAlertThreshold: number;
+}
+
+/**
+ * Thrown by `rebuildTreeRoot` when a record's own data can't even be hashed
+ * (e.g. a malformed `client_address`) — distinguished from the plain `Error`
+ * thrown for an empty batch (an invariant violation, meant to propagate and
+ * abort the whole reconcile pass) so callers can instead treat this one
+ * batch as failed and keep reconciling the rest.
+ */
+export class RebuildHashError extends Error {
+  constructor(batchId: number, recordId: number, cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `batch ${batchId}: record ${recordId} could not be hashed while rebuilding the tree — ${reason}`,
+    );
+
+    this.name = "RebuildHashError";
+  }
 }
 
 /**
@@ -185,6 +209,38 @@ async function reconcileSubmitted(
       return; // re-checked next cycle
 
     case "missing": {
+      let rebuiltRoot: string;
+      try {
+        rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
+      } catch (error) {
+        if (error instanceof RebuildHashError) {
+          logger.error(
+            { batchId: batch.id, err: error.message },
+            error.message,
+          );
+
+          await deps.markFailed(batch.id, error.message);
+          summary.failed++;
+
+          return;
+        }
+
+        throw error;
+      }
+
+      if (rebuiltRoot !== batch.merkleRoot) {
+        const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering while the transaction was stuck, not auto-resent`;
+
+        logger.error(
+          { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
+          message,
+        );
+
+        await deps.markFailed(batch.id, message);
+        summary.failed++;
+        return;
+      }
+
       const tx = await deps.resendTransaction(
         batch.merkleRoot,
         batch.size,
@@ -205,11 +261,10 @@ async function rebuildTreeRoot(
 ): Promise<string> {
   const entries: LeafEntry[] = [];
 
-  // Ver o que fazer, pois se passar endereço formatado errado só estoura um erro e nada é revertido (não tem try e catch)
   for await (const record of deps.streamBatchRecords(batchId)) {
-    entries.push({
-      recordId: record.id,
-      leaf: computeLeafHash({
+    let leaf: string;
+    try {
+      leaf = computeLeafHash({
         id: record.id,
         entityId: record.entityId,
         recordType: record.recordType,
@@ -220,8 +275,14 @@ async function rebuildTreeRoot(
         clientAddress: record.clientAddress,
         signature: record.signature,
         createdAt: record.createdAt,
-      }),
-    });
+      });
+    } catch (error) {
+      const rebuildError = new RebuildHashError(batchId, record.id, error);
+      await deps.recordHashFailure(record.id, batchId, rebuildError.message);
+      throw rebuildError;
+    }
+
+    entries.push({ recordId: record.id, leaf });
   }
 
   if (entries.length === 0) {
@@ -240,7 +301,20 @@ async function reconcileFailed(
   options: ReconcileOptions,
   summary: ReconcileSummary,
 ): Promise<void> {
-  const rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
+  let rebuiltRoot: string;
+  try {
+    rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
+  } catch (error) {
+    if (error instanceof RebuildHashError) {
+      logger.error({ batchId: batch.id, err: error.message }, error.message);
+      await deps.markFailed(batch.id, error.message);
+
+      summary.failed++;
+      return;
+    }
+
+    throw error;
+  }
 
   if (rebuiltRoot !== batch.merkleRoot) {
     const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`;
@@ -257,7 +331,11 @@ async function reconcileFailed(
 
   const nextRetryCount = batch.retryCount + 1;
   try {
-    const result = await deps.submitRoot(batch.merkleRoot, batch.size, batch.id);
+    const result = await deps.submitRoot(
+      batch.merkleRoot,
+      batch.size,
+      batch.id,
+    );
 
     if (result.status === "already-on-chain") {
       const block = await deps.findRootOnChain(batch.merkleRoot);
@@ -347,5 +425,7 @@ export function createReconcileDeps(
         oldTxHash,
         options.maxFeeGwei,
       ),
+    recordHashFailure: (recordId, batchId, details) =>
+      dbRecordHashFailure(pool, recordId, batchId, details),
   };
 }
