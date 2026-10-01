@@ -6,39 +6,50 @@ import {
   isWhitelistedAddress,
   recoverSignerAddress,
   verifyClientSignature,
+  type SignableRecordContent,
 } from "../src/signature.ts";
 
 describe("signature verification", () => {
   let wallet: HDNodeWallet;
 
+  const BASE_CONTENT: SignableRecordContent = {
+    recordType: "prescription",
+    data: { drug: "amoxicillin", dose: "500mg" },
+    version: 1,
+    isDeleted: false,
+    replaces: null,
+    entityId: null,
+  };
+
   beforeEach(async () => {
     wallet = Wallet.createRandom();
   });
 
-  it("should recover the signer address from valid signature with a real wallet", async () => {
-    const data = {
-      operation: "CREATE_RECORD",
-      amount: 2500,
-      user: "Test User",
-    };
-    const signature = await wallet.signMessage(canonicalize(data));
-    const recoveredAddress = recoverSignerAddress(data, signature);
+  async function sign(content: SignableRecordContent, signer = wallet) {
+    return signer.signMessage(canonicalize(content));
+  }
 
-    expect(recoveredAddress.toLowerCase()).to.equal(
-      wallet.address.toLowerCase(),
-    );
+  it("should recover the signer address from a valid signature with a real wallet", async () => {
+    const signature = await sign(BASE_CONTENT);
+    const recoveredAddress = recoverSignerAddress(BASE_CONTENT, signature);
+
     expect(recoveredAddress).to.equal(wallet.address);
   });
 
   it("should verify valid client signature regardless of property order in data", async () => {
-    const originalData = { name: "Daniel", role: "Auditor", active: true };
-    const signature = await wallet.signMessage(canonicalize(originalData));
+    const originalContent = {
+      ...BASE_CONTENT,
+      data: { name: "Daniel", role: "Auditor", active: true },
+    };
+    const signature = await sign(originalContent);
 
-    const shuffledData = { active: true, role: "Auditor", name: "Daniel" };
+    const shuffledContent = {
+      ...BASE_CONTENT,
+      data: { active: true, role: "Auditor", name: "Daniel" },
+    };
 
     const isValid = verifyClientSignature({
-      id: "rec-01",
-      data: shuffledData,
+      ...shuffledContent,
       signature,
       clientAddress: wallet.address,
     });
@@ -47,13 +58,11 @@ describe("signature verification", () => {
   });
 
   it("should reject tampered data and return false", async () => {
-    const data = { salary: 5000, recipient: "Arthur" };
-    const signature = await wallet.signMessage(canonicalize(data));
-    const tamperedData = { salary: 90000, recipient: "Arthur" };
+    const signature = await sign(BASE_CONTENT);
 
     const isValid = verifyClientSignature({
-      id: "rec-02",
-      data: tamperedData,
+      ...BASE_CONTENT,
+      data: { ...BASE_CONTENT.data, dose: "9999mg" },
       signature,
       clientAddress: wallet.address,
     });
@@ -62,15 +71,11 @@ describe("signature verification", () => {
   });
 
   it("should reject impostor clientAddress", async () => {
-    const legitimateWallet = wallet;
     const attackerWallet = Wallet.createRandom();
-    const data = { action: "TRANSFER", to: "0xabc", value: 100 };
-    const signature = await legitimateWallet.signMessage(canonicalize(data));
+    const signature = await sign(BASE_CONTENT);
 
-    // Payload claims to be attacker's address
     const isValid = verifyClientSignature({
-      id: "rec-03",
-      data,
+      ...BASE_CONTENT,
       signature,
       clientAddress: attackerWallet.address,
     });
@@ -79,59 +84,49 @@ describe("signature verification", () => {
   });
 
   it("should handle lowercase and checksummed addresses seamlessly (case-insensitive)", async () => {
-    const data = { action: "APPROVE" };
-    const signature = await wallet.signMessage(canonicalize(data));
-    const lowercaseAddress = wallet.address.toLowerCase();
-    const checksummedAddress = wallet.address;
-
-    const isValidLower = verifyClientSignature({
-      id: "rec-04",
-      data,
-      signature,
-      clientAddress: lowercaseAddress,
-    });
-
-    const isValidChecksum = verifyClientSignature({
-      id: "rec-04",
-      data,
-      signature,
-      clientAddress: checksummedAddress,
-    });
-
-    expect(isValidLower).to.be.true;
-    expect(isValidChecksum).to.be.true;
-  });
-
-  it("should handle malformed or corrupted signatures without crashing", () => {
-    const data = { valid: true };
-
-    const resultCorrupted = verifyClientSignature({
-      id: "rec-05",
-      data,
-      signature: "0x1234",
-      clientAddress: wallet.address,
-    });
-
-    const resultInvalidHex = verifyClientSignature({
-      id: "rec-05",
-      data,
-      signature: "not-a-valid-hex-signature",
-      clientAddress: wallet.address,
-    });
-
-    expect(resultCorrupted).to.be.false;
-    expect(resultInvalidHex).to.be.false;
-
-    expect(() => recoverSignerAddress(data, "0x1234")).to.throw();
-  });
-
-  it("should return false for incomplete or invalid payloads", () => {
-    const data = { test: true };
+    const signature = await sign(BASE_CONTENT);
 
     expect(
       verifyClientSignature({
-        id: "1",
-        data,
+        ...BASE_CONTENT,
+        signature,
+        clientAddress: wallet.address.toLowerCase(),
+      }),
+    ).to.be.true;
+
+    expect(
+      verifyClientSignature({
+        ...BASE_CONTENT,
+        signature,
+        clientAddress: wallet.address,
+      }),
+    ).to.be.true;
+  });
+
+  it("should handle malformed or corrupted signatures without crashing", () => {
+    expect(
+      verifyClientSignature({
+        ...BASE_CONTENT,
+        signature: "0x1234",
+        clientAddress: wallet.address,
+      }),
+    ).to.be.false;
+
+    expect(
+      verifyClientSignature({
+        ...BASE_CONTENT,
+        signature: "not-a-valid-hex-signature",
+        clientAddress: wallet.address,
+      }),
+    ).to.be.false;
+
+    expect(() => recoverSignerAddress(BASE_CONTENT, "0x1234")).to.throw();
+  });
+
+  it("should return false for incomplete or invalid payloads", () => {
+    expect(
+      verifyClientSignature({
+        ...BASE_CONTENT,
         signature: "",
         clientAddress: wallet.address,
       }),
@@ -139,13 +134,38 @@ describe("signature verification", () => {
 
     expect(
       verifyClientSignature({
-        id: "1",
-        data,
+        ...BASE_CONTENT,
         signature: "0x1234",
         clientAddress: "",
       }),
     ).to.be.false;
   });
+
+  // The whole point of this widening: tampering any of these fields after
+  // signing must now be caught by the signature check itself, before the
+  // record ever reaches a Merkle leaf.
+  const fieldChanges: Array<[string, Partial<SignableRecordContent>]> = [
+    ["recordType", { recordType: "emr_encounter" }],
+    ["version", { version: 3 }],
+    ["isDeleted", { isDeleted: true }],
+    ["replaces", { replaces: 7 }],
+    ["entityId", { entityId: 999 }],
+  ];
+
+  for (const [field, change] of fieldChanges) {
+    it(`should reject a record whose ${field} changed after signing`, async () => {
+      const signature = await sign(BASE_CONTENT);
+
+      const isValid = verifyClientSignature({
+        ...BASE_CONTENT,
+        ...change,
+        signature,
+        clientAddress: wallet.address,
+      });
+
+      expect(isValid).to.be.false;
+    });
+  }
 
   it("should validate whitelist addresses accurately with checksum support", () => {
     const allowedAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";

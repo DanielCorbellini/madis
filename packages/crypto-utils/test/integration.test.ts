@@ -9,7 +9,15 @@ import {
   verifyClientSignature,
   verifyMerkleProof,
 } from "../src/index.ts";
-import type { RecordPayload } from "../src/types.ts";
+import type { RecordPayload, SignableRecordContent } from "../src/types.ts";
+
+const NEW_RECORD_CONTENT: Omit<SignableRecordContent, "data"> = {
+  recordType: "prescription",
+  version: 1,
+  isDeleted: false,
+  replaces: null,
+  entityId: null,
+};
 
 const CREATED_AT = new Date("2026-01-01T00:00:00.000Z");
 
@@ -57,11 +65,10 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
 
     const signedPayloads: RecordPayload[] = await Promise.all(
       rawRecords.map(async (r) => {
-        const canonicalData = canonicalize(r.data);
-        const signature = await r.client.signMessage(canonicalData);
+        const content = { ...NEW_RECORD_CONTENT, data: r.data };
+        const signature = await r.client.signMessage(canonicalize(content));
         return {
-          id: r.id,
-          data: r.data,
+          ...content,
           signature,
           clientAddress: r.client.address,
         };
@@ -113,12 +120,12 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
 
     const batch = await Promise.all(
       rawRecords.map(async (r) => {
+        const content = { ...NEW_RECORD_CONTENT, data: r.data };
         const signature = await authorizedClientA.signMessage(
-          canonicalize(r.data),
+          canonicalize(content),
         );
         return {
-          id: r.id,
-          data: r.data,
+          ...content,
           signature,
           clientAddress: authorizedClientA.address,
         };
@@ -190,7 +197,7 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     // 1. Legitimate original record anchored on blockchain
     const originalData = { contractId: "CT-2026", approvedBudget: 50000 };
     const originalSignature = await authorizedClientA.signMessage(
-      canonicalize(originalData),
+      canonicalize({ ...NEW_RECORD_CONTENT, data: originalData }),
     );
     const originalLeaf = computeLeafHash({
       id: 1,
@@ -223,11 +230,11 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
     // 2. Attacker modifies data, signs with attackerWallet, and updates clientAddress in DB
     const forgedData = { contractId: "CT-2026", approvedBudget: 500000 };
     const forgedSignature = await attackerWallet.signMessage(
-      canonicalize(forgedData),
+      canonicalize({ ...NEW_RECORD_CONTENT, data: forgedData }),
     );
 
     const forgedRow: RecordPayload = {
-      id: "ct-1",
+      ...NEW_RECORD_CONTENT,
       data: forgedData,
       signature: forgedSignature,
       clientAddress: attackerWallet.address,
@@ -269,7 +276,7 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
       active: true,
     };
     const signature = await authorizedClientA.signMessage(
-      canonicalize(clientJson),
+      canonicalize({ ...NEW_RECORD_CONTENT, data: clientJson }),
     );
 
     // 2. Database stores and returns keys in different order
@@ -282,7 +289,7 @@ describe("E2E Crypto Pipeline & Security Integration", () => {
 
     // 3. Verification passes transparently
     const isSigValid = verifyClientSignature({
-      id: "doc-99",
+      ...NEW_RECORD_CONTENT,
       data: dbJson,
       signature,
       clientAddress: authorizedClientA.address,

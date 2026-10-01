@@ -1,16 +1,22 @@
 import { getAddress, isAddress, verifyMessage } from "ethers";
 import { canonicalize } from "./canonicalizer.ts";
-import type { RecordPayload } from "./types.ts";
+import type { RecordPayload, SignableRecordContent } from "./types.ts";
+
+export type { SignableRecordContent };
 
 /**
- * Recovers the Ethereum address that signed the canonical representation of data.
+ * Recovers the Ethereum address that signed the canonical representation of
+ * a record's full signable content, every field a client can know in advance
+ * (`recordType`, `version`, `isDeleted`, `replaces`, `entityId`), so
+ * tampering with any of them before anchoring invalidates the signature instead
+ * of silently passing through.
  */
 export function recoverSignerAddress(
-  data: Record<string, unknown>,
+  content: SignableRecordContent,
   signature: string,
 ): string {
-  const canonicalData = canonicalize(data);
-  return verifyMessage(canonicalData, signature);
+  const canonicalContent = canonicalize(content);
+  return verifyMessage(canonicalContent, signature);
 }
 
 /**
@@ -19,16 +25,19 @@ export function recoverSignerAddress(
  */
 export function verifyClientSignature(payload: RecordPayload): boolean {
   try {
-    if (!payload.clientAddress || !payload.signature || !payload.data) {
+    if (
+      !payload.clientAddress ||
+      !payload.signature ||
+      !payload.data ||
+      !payload.recordType
+    ) {
       return false;
     }
 
-    const recoveredAddress = recoverSignerAddress(
-      payload.data,
-      payload.signature,
-    );
+    const { signature, clientAddress, ...content } = payload;
+    const recoveredAddress = recoverSignerAddress(content, signature);
 
-    return getAddress(recoveredAddress) === getAddress(payload.clientAddress);
+    return getAddress(recoveredAddress) === getAddress(clientAddress);
   } catch {
     return false;
   }
