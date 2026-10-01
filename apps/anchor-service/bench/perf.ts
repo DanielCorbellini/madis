@@ -86,15 +86,21 @@ async function benchmarkSize(
   tracker.sample();
 
   const { result: validated, ms: validateMs } = await timed(async () =>
-    records.filter(
-      (record) =>
+    records.filter((record) => {
+      const isCreate = record.replaces === null;
+      return (
         verifyClientSignature({
-          id: String(record.id),
+          recordType: record.recordType,
           data: record.payload,
+          version: record.version,
+          isDeleted: record.isDeleted,
+          replaces: record.replaces,
+          entityId: isCreate ? null : record.entityId,
           signature: record.signature,
           clientAddress: record.clientAddress,
-        }) && isWhitelistedAddress(record.clientAddress, [wallet.address]),
-    ),
+        }) && isWhitelistedAddress(record.clientAddress, [wallet.address])
+      );
+    }),
   );
   tracker.sample();
 

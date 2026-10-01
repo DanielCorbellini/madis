@@ -127,7 +127,16 @@ export async function seedRecords(
         // console.log(payload);
         // console.log(canonicalize(payload));
 
-        const signature = wallet.signMessageSync(canonicalize(payload));
+        const signature = wallet.signMessageSync(
+          canonicalize({
+            recordType: type,
+            data: payload,
+            version: 1,
+            isDeleted: false,
+            replaces: null,
+            entityId: null,
+          }),
+        );
 
         yield `${id}\t${id}\t${type}\t${JSON.stringify(payload)}\t1\t${wallet.address}\t${signature}\n`;
       }

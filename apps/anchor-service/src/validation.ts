@@ -11,8 +11,19 @@ export type ValidationResult =
 
 /**
  * Re-checks a record before it enters a batch:
- *  1. The ECDSA signature must still match the payload and `client_address`
+ *  1. The ECDSA signature must still match every field the client could
+ *     know in advance (recordType, payload, version, isDeleted, replaces,
+ *     and — for an update/delete — entityId), not just the payload and
+ *     `client_address`. `version` is signed as the value the write becomes
+ *     (e.g. 2, not the 1 it replaces), so it's read straight from the row —
+ *     no derivation needed.
  *  2. The signer must be whitelisted.
+ *
+ * `id`, `createdAt`, and `entityId`-on-create can never be covered by any
+ * client signature — the database only mints them after the client has
+ * already signed — so tampering with those specifically remains outside
+ * what this check can catch (see docs/overview/anchor-service's
+ * pre-anchoring-tamper-window note).
  *
  * On success returns the Merkle leaf
  */
@@ -20,9 +31,15 @@ export function validateRecord(
   record: AnchorableRecord,
   whitelist: string[],
 ): ValidationResult {
+  const isCreate = record.replaces === null;
+
   const signatureValid = verifyClientSignature({
-    id: String(record.id),
+    recordType: record.recordType,
     data: record.payload,
+    version: record.version,
+    isDeleted: record.isDeleted,
+    replaces: record.replaces,
+    entityId: isCreate ? null : record.entityId,
     signature: record.signature,
     clientAddress: record.clientAddress,
   });
