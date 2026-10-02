@@ -90,6 +90,9 @@ export async function collectValidBatch(
   /**
    * Get all unanchored records and validate them. Those that pass validation are added to the Merkle tree,
    * those that fail are logged and an alert is inserted.
+   *
+   * The biggest bottleneck is here, ESCDA signature verification is expensive, and we have to do it for every record.
+   * We could consider batching or parallelizing this in the future, but for now, we process them sequentially.
    */
   for await (const record of deps.streamUnanchoredRecords()) {
     scannedCount++;

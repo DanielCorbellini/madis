@@ -6,6 +6,7 @@
  * Do not edit by hand.
  */
 export const deployments: Record<string, { MerkleAnchorRegistry: string }> = {
+  "31337": { MerkleAnchorRegistry: "0x5FbDB2315678afecb367f032d93F642f64180aa3" },
   "80002": { MerkleAnchorRegistry: "0xF3C280280Fae0aB49334Fe30781879eb3476cF62" },
 };
 

@@ -16,6 +16,7 @@ export function recoverSignerAddress(
   signature: string,
 ): string {
   const canonicalContent = canonicalize(content);
+  // probably should be using another library to verify signatures. Maybe one that is faster and compiled with Rust or C++
   return verifyMessage(canonicalContent, signature);
 }
 
@@ -65,3 +66,11 @@ export function isWhitelistedAddress(
     return false;
   }
 }
+
+/**
+ * TODO: This is a placeholder for a faster signature verification function.
+ * The current implementation uses ethers.js's verifyMessage,
+ * which is the biggest bottleneck for the large-scale verification.
+ * Considering using a more performant library.
+ */
+function fastVerifyMessage() {}
