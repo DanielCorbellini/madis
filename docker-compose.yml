@@ -23,6 +23,26 @@ services:
       timeout: 5s
       retries: 5
 
+  hardhat-node:
+    profiles:
+      - local
+    build:
+      context: .
+      dockerfile: apps/integrity-domain/Dockerfile
+    container_name: hardhat_node
+    restart: unless-stopped
+    ports:
+      - "8545:8545"
+    volumes:
+      - ./packages/contracts-shared/src/deployments.ts:/app/packages/contracts-shared/src/deployments.ts
+      - ./apps/integrity-domain/ignition/deployments:/app/apps/integrity-domain/ignition/deployments
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
   data-domain:
     build:
       context: .
@@ -38,7 +58,7 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
       PORT: 3000
-      WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-}
+      WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266}
     healthcheck:
       test:
         [
@@ -68,13 +88,13 @@ services:
       # For now, this variables will be setted here, but in the future,
       # The idea is using another mechanism to store the private key, such as KMS or HSM
       # For now, to make things easier, we will store this informations in a .env file
-      RPC_URL: ${RPC_URL:-}
+      RPC_URL: ${RPC_URL:-http://hardhat-node:8545}
       ANCHOR_CHAIN_ID: ${ANCHOR_CHAIN_ID:-31337}
       ANCHOR_CRON_SCHEDULE: ${ANCHOR_CRON_SCHEDULE:-0 */3 * * *}
-      ANCHOR_PRIVATE_KEY: ${ANCHOR_PRIVATE_KEY:-}
+      ANCHOR_PRIVATE_KEY: ${ANCHOR_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
-      WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-}
-      ANCHOR_CONFIRMATIONS: ${ANCHOR_CONFIRMATIONS:-3}
+      WHITELIST_ADDRESSES: ${WHITELIST_ADDRESSES:-0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266}
+      ANCHOR_CONFIRMATIONS: ${ANCHOR_CONFIRMATIONS:-1}
       ANCHOR_CONFIRMATION_TIMEOUT_MS: ${ANCHOR_CONFIRMATION_TIMEOUT_MS:-300000}
       ANCHOR_MAX_FEE_GWEI: ${ANCHOR_MAX_FEE_GWEI:-100}
       ANCHOR_TX_RETRIES: ${ANCHOR_TX_RETRIES:-4}
@@ -126,7 +146,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgrespassword@postgres:5432/records}
-      RPC_URL: ${RPC_URL:-http://host.docker.internal:8545}
+      RPC_URL: ${RPC_URL:-http://hardhat-node:8545}
       ANCHOR_CHAIN_ID: ${ANCHOR_CHAIN_ID:-31337}
       MONITOR_CRON_SCHEDULE: ${MONITOR_CRON_SCHEDULE:-*/5 * * * *}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS:-}
