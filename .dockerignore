@@ -1,0 +1,40 @@
+# Dependencies & Package Managers
+**/node_modules
+**/.pnpm-store
+**/.npm
+**/.yarn
+
+# Git & Version Control
+.git
+.gitignore
+
+# Build outputs & caches (generated cleanly inside containers)
+**/dist
+**/build
+**/artifacts
+**/cache
+**/types
+packages/contracts-shared/src/abi
+packages/contracts-shared/src/generated
+
+# Environment files & secrets
+**/.env*
+docker-compose.override.yml
+
+# Tests (not needed in runtime/daemon containers)
+**/test
+**/tests
+**/*.test.ts
+**/*.spec.ts
+test-db.ts
+
+# Documentation, AI instructions & notes
+docs/
+*.md
+**/.agents
+**/.claude
+
+# Benchmark dumps & logs
+apps/anchor-service/bench/results/
+**/*.log
+**/.DS_Store
