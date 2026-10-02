@@ -23,7 +23,7 @@ import {
   submitRoot as chainSubmitRoot,
   type SubmitResult,
 } from "./chain-submit.ts";
-import type { ChainClient, ChainProvider } from "./chain.ts";
+import { type ChainClient, createProviderAdapter } from "./chain.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 
 export interface ReconcileDeps {
@@ -380,29 +380,7 @@ export function createReconcileDeps(
   pool: Pool,
   options: { retries: number; maxFeeGwei: number },
 ): ReconcileDeps {
-  const provider: Pick<
-    ChainProvider,
-    | "getFeeData"
-    | "getTransaction"
-    | "getBlock"
-    | "getBlockNumber"
-    | "getTransactionReceipt"
-  > = {
-    getFeeData: () => chain.provider.getFeeData(),
-    getTransaction: (hash: string) => chain.provider.getTransaction(hash),
-    getBlock: (blockNumber: number) => chain.provider.getBlock(blockNumber),
-    getBlockNumber: () => chain.provider.getBlockNumber(),
-    getTransactionReceipt: async (hash: string) => {
-      const receipt = await chain.provider.getTransactionReceipt(hash);
-      if (!receipt) return null;
-      return {
-        status: receipt.status ?? 0,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed,
-        gasPrice: receipt.gasPrice,
-      };
-    },
-  };
+  const provider = createProviderAdapter(chain);
 
   return {
     findInFlightBatches: () => dbFindInFlightBatches(pool),

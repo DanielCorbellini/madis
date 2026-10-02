@@ -3,7 +3,12 @@ import {
   getMerkleAnchorRegistry,
   type MerkleAnchorRegistryLike,
 } from "contracts-shared";
-import { getAddress, JsonRpcProvider, Wallet } from "ethers";
+import {
+  getAddress,
+  JsonRpcProvider,
+  Wallet,
+  type TransactionReceipt,
+} from "ethers";
 import type { AnchorConfig } from "./config.ts";
 
 type ChainClientConfig = Pick<
@@ -61,6 +66,44 @@ export function createChainClient(config: ChainClientConfig): ChainClient {
   );
 
   return { provider, wallet, contract };
+}
+
+function toBlockRefReceipt(receipt: TransactionReceipt | null): {
+  status: number;
+  blockNumber: number;
+  gasUsed?: bigint;
+  gasPrice?: bigint;
+} | null {
+  if (!receipt) return null;
+
+  return {
+    status: receipt.status ?? 0,
+    blockNumber: receipt.blockNumber,
+    gasUsed: receipt.gasUsed,
+    gasPrice: receipt.gasPrice,
+  };
+}
+
+/**
+ * Adapts a ChainClient's real ethers provider to the narrower `ChainProvider`
+ * shape consumed by chain-submit/chain-confirm/cycle/reconcile, coercing
+ * ethers' nullable receipt `status` to the non-null shape those modules expect.
+ */
+export function createProviderAdapter(chain: ChainClient): ChainProvider {
+  return {
+    getFeeData: () => chain.provider.getFeeData(),
+    getTransaction: (hash) => chain.provider.getTransaction(hash),
+    getBlock: (blockNumber) => chain.provider.getBlock(blockNumber),
+    getBlockNumber: () => chain.provider.getBlockNumber(),
+    getTransactionReceipt: async (hash) =>
+      toBlockRefReceipt(await chain.provider.getTransactionReceipt(hash)),
+    waitForTransaction: async (hash, confirms, timeout) =>
+      toBlockRefReceipt(
+        await chain.provider.waitForTransaction(hash, confirms, timeout),
+      ),
+    getCode: (address) => chain.provider.getCode(address),
+    getNetwork: () => chain.provider.getNetwork(),
+  };
 }
 
 /**

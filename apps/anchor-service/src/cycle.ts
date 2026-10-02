@@ -23,7 +23,7 @@ import {
   submitRoot as chainSubmitRoot,
   type SubmitResult,
 } from "./chain-submit.ts";
-import type { ChainClient, ChainProvider } from "./chain.ts";
+import { type ChainClient, createProviderAdapter } from "./chain.ts";
 import type { AnchorConfig } from "./config.ts";
 import { buildCycleSummary, type CycleSummary } from "./metrics.ts";
 import {
@@ -450,25 +450,7 @@ export function createCycleDeps(
     maxFeeGwei: config.maxFeeGwei,
   });
 
-  const provider: Pick<ChainProvider, "waitForTransaction" | "getBlock"> = {
-    getBlock: (blockNumber) => chain.provider.getBlock(blockNumber),
-    waitForTransaction: async (hash, confirms, timeout) => {
-      const receipt = await chain.provider.waitForTransaction(
-        hash,
-        confirms,
-        timeout,
-      );
-
-      if (!receipt) return null;
-
-      return {
-        status: receipt.status ?? 0,
-        blockNumber: receipt.blockNumber,
-        gasUsed: receipt.gasUsed,
-        gasPrice: receipt.gasPrice,
-      };
-    },
-  };
+  const provider = createProviderAdapter(chain);
 
   return {
     reconcileBatches: () =>
