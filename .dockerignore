@@ -14,8 +14,7 @@
 **/artifacts
 **/cache
 **/types
-packages/contracts-shared/src/abi
-packages/contracts-shared/src/generated
+
 
 # Environment files & secrets
 **/.env*

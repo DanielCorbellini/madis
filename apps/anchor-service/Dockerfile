@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/anchor-service/ ./apps/anchor-service/
 
@@ -17,7 +17,7 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY --from=builder /app/package.json /app/pnpm-workspace.yaml /app/tsconfig.base.json ./
+COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/tsconfig.base.json ./
 COPY --from=builder /app/node_modules/ ./node_modules/
 COPY --from=builder /app/packages/ ./packages/
 COPY --from=builder /app/apps/anchor-service/ ./apps/anchor-service/
