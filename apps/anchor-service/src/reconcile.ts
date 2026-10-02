@@ -395,7 +395,12 @@ export function createReconcileDeps(
     getTransactionReceipt: async (hash: string) => {
       const receipt = await chain.provider.getTransactionReceipt(hash);
       if (!receipt) return null;
-      return { status: receipt.status ?? 0, blockNumber: receipt.blockNumber };
+      return {
+        status: receipt.status ?? 0,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed,
+        gasPrice: receipt.gasPrice,
+      };
     },
   };
 

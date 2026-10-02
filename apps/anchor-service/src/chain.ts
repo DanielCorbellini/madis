@@ -28,14 +28,22 @@ export interface ChainProvider {
   getTransaction(hash: string): Promise<{ nonce: number } | null>;
   getBlock(blockNumber: number): Promise<{ timestamp: number } | null>;
   getBlockNumber(): Promise<number>;
-  getTransactionReceipt(
-    hash: string,
-  ): Promise<{ status: number; blockNumber: number } | null>;
+  getTransactionReceipt(hash: string): Promise<{
+    status: number;
+    blockNumber: number;
+    gasUsed?: bigint;
+    gasPrice?: bigint;
+  } | null>;
   waitForTransaction(
     hash: string,
     confirms: number,
     timeout: number,
-  ): Promise<{ status: number; blockNumber: number } | null>;
+  ): Promise<{
+    status: number;
+    blockNumber: number;
+    gasUsed?: bigint;
+    gasPrice?: bigint;
+  } | null>;
   getCode(address: string): Promise<string>;
   getNetwork(): Promise<{ chainId: bigint }>;
 }

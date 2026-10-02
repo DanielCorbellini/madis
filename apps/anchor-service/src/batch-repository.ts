@@ -110,21 +110,34 @@ export async function markSubmitted(
 export async function markConfirmed(
   db: Queryable,
   batchId: number,
-  block: { number: number; timestamp: number },
+  block: {
+    number: number;
+    timestamp: number;
+    gasUsed?: string | null;
+    gasPrice?: string | null;
+  },
 ): Promise<void> {
   await db.query(
     `
-      UPDATE 
+      UPDATE
           batches
       SET
           status = 'confirmed',
           block_number = $2,
           block_timestamp = to_timestamp($3),
+          gas_used = $4,
+          gas_price = $5,
           confirmed_at = NOW()
-      WHERE 
+      WHERE
           id = $1
     `,
-    [batchId, block.number, block.timestamp],
+    [
+      batchId,
+      block.number,
+      block.timestamp,
+      block.gasUsed ?? null,
+      block.gasPrice ?? null,
+    ],
   );
 }
 

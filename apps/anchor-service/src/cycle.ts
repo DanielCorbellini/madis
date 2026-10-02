@@ -342,6 +342,8 @@ export async function runCycle(
       root: null,
       txHash: null,
       blockNumber: null,
+      gasUsed: null,
+      gasPrice: null,
       status: "nothing-to-anchor",
       durationMs: performance.now() - cycleStart,
       stageMs: { reconcile: reconcileMs, collect: collectMs },
@@ -369,6 +371,8 @@ export async function runCycle(
       root: collected.root,
       txHash: null,
       blockNumber: null,
+      gasUsed: null,
+      gasPrice: null,
       status: "aborted",
       durationMs: performance.now() - cycleStart,
       stageMs: {
@@ -402,6 +406,14 @@ export async function runCycle(
     txHash: submitResult.status === "failed" ? null : submitResult.txHash,
     blockNumber:
       submitResult.status === "confirmed" ? submitResult.block.number : null,
+    gasUsed:
+      submitResult.status === "confirmed"
+        ? (submitResult.block.gasUsed ?? null)
+        : null,
+    gasPrice:
+      submitResult.status === "confirmed"
+        ? (submitResult.block.gasPrice ?? null)
+        : null,
     status: submitResult.status,
     durationMs: performance.now() - cycleStart,
     stageMs: {
@@ -446,8 +458,15 @@ export function createCycleDeps(
         confirms,
         timeout,
       );
+
       if (!receipt) return null;
-      return { status: receipt.status ?? 0, blockNumber: receipt.blockNumber };
+
+      return {
+        status: receipt.status ?? 0,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed,
+        gasPrice: receipt.gasPrice,
+      };
     },
   };
 

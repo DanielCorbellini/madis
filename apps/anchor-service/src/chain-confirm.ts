@@ -4,6 +4,8 @@ import type { ChainProvider } from "./chain.ts";
 export interface BlockRef {
   number: number;
   timestamp: number;
+  gasUsed?: string | null;
+  gasPrice?: string | null;
 }
 
 export class RevertedTransactionError extends Error {
@@ -53,7 +55,12 @@ export async function findRootOnChain(
     );
   }
 
-  return { number: logs[0].blockNumber, timestamp: block.timestamp };
+  return {
+    number: logs[0].blockNumber,
+    timestamp: block.timestamp,
+    gasUsed: null,
+    gasPrice: null,
+  };
 }
 
 /**
@@ -90,7 +97,12 @@ export async function awaitConfirmation(
     );
   }
 
-  return { number: receipt.blockNumber, timestamp: block.timestamp };
+  return {
+    number: receipt.blockNumber,
+    timestamp: block.timestamp,
+    gasUsed: receipt.gasUsed?.toString() ?? null,
+    gasPrice: receipt.gasPrice?.toString() ?? null,
+  };
 }
 
 /**
@@ -126,6 +138,11 @@ export async function inspectTransaction(
 
   return {
     kind: "confirmed",
-    block: { number: receipt.blockNumber, timestamp: block.timestamp },
+    block: {
+      number: receipt.blockNumber,
+      timestamp: block.timestamp,
+      gasUsed: receipt.gasUsed?.toString() ?? null,
+      gasPrice: receipt.gasPrice?.toString() ?? null,
+    },
   };
 }

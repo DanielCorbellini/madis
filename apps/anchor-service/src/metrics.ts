@@ -16,6 +16,8 @@ export interface CycleSummary {
   root: string | null;
   txHash: string | null;
   blockNumber: number | null;
+  gasUsed: string | null;
+  gasPrice: string | null;
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;
@@ -35,6 +37,8 @@ export function buildCycleSummary(input: {
   root: string | null;
   txHash: string | null;
   blockNumber: number | null;
+  gasUsed: string | null;
+  gasPrice: string | null;
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;
