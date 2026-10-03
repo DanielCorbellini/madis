@@ -37,26 +37,37 @@ import { validateRecord } from "./validation.ts";
 
 export interface CycleDeps {
   reconcileBatches(): Promise<ReconcileSummary>;
-  streamUnanchoredRecords(): AsyncGenerator<AnchorableRecord>;
-  recordSignatureMismatch(recordId: number, details: string): Promise<boolean>;
-  persistBatch(batch: {
-    root: string;
-    entries: AnchorEntry[];
-  }): Promise<number>;
-  findRootOnChain(root: string): Promise<BlockRef | null>;
-  submitRoot(
-    root: string,
-    size: number,
-    batchId: number,
-  ): Promise<SubmitResult>;
-  awaitConfirmation(
-    txHash: string,
-    confirmations: number,
-    timeoutMs: number,
-  ): Promise<BlockRef>;
-  markSubmitted(batchId: number, txHash: string): Promise<void>;
-  markConfirmed(batchId: number, block: BlockRef): Promise<void>;
-  markFailed(batchId: number, errorMessage: string): Promise<void>;
+  records: {
+    streamUnanchoredRecords(): AsyncGenerator<AnchorableRecord>;
+  };
+  chain: {
+    findRootOnChain(root: string): Promise<BlockRef | null>;
+    submitRoot(
+      root: string,
+      size: number,
+      batchId: number,
+    ): Promise<SubmitResult>;
+    awaitConfirmation(
+      txHash: string,
+      confirmations: number,
+      timeoutMs: number,
+    ): Promise<BlockRef>;
+  };
+  batches: {
+    persistBatch(batch: {
+      root: string;
+      entries: AnchorEntry[];
+    }): Promise<number>;
+    markSubmitted(batchId: number, txHash: string): Promise<void>;
+    markConfirmed(batchId: number, block: BlockRef): Promise<void>;
+    markFailed(batchId: number, errorMessage: string): Promise<void>;
+  };
+  alerts: {
+    recordSignatureMismatch(
+      recordId: number,
+      details: string,
+    ): Promise<boolean>;
+  };
 }
 
 export interface CollectedBatch {
@@ -68,6 +79,31 @@ export interface CollectedBatch {
   stageMs: { scanAndValidate: number; tree: number };
 }
 
+export interface CycleOptions {
+  cycleNumber: number;
+  whitelistedAddresses: string[];
+  confirmations: number;
+  confirmationTimeoutMs: number;
+}
+
+export type SubmitAndConfirmResult =
+  | {
+      status: "confirmed";
+      block: BlockRef;
+      txHash: string | null;
+      stageMs: { submit: number; confirm: number };
+    }
+  | {
+      status: "submitted";
+      txHash: string;
+      stageMs: { submit: number; confirm: number };
+    }
+  | {
+      status: "failed";
+      errorMessage: string;
+      stageMs: { submit: number; confirm: number };
+    };
+
 /**
  * 1. Get every un-anchored record
  * 2. Validates each one (signature + whitelist)
@@ -78,7 +114,7 @@ export interface CollectedBatch {
  * never calls `buildAnchorTree` with an empty array.
  */
 export async function collectValidBatch(
-  deps: Pick<CycleDeps, "streamUnanchoredRecords" | "recordSignatureMismatch">,
+  deps: Pick<CycleDeps, "records" | "alerts">,
   whitelistedAddresses: string[],
   logger: Logger,
 ): Promise<CollectedBatch | null> {
@@ -94,7 +130,7 @@ export async function collectValidBatch(
    * The biggest bottleneck is here, ESCDA signature verification is expensive, and we have to do it for every record.
    * We could consider batching or parallelizing this in the future, but for now, we process them sequentially.
    */
-  for await (const record of deps.streamUnanchoredRecords()) {
+  for await (const record of deps.records.streamUnanchoredRecords()) {
     scannedCount++;
     const verdict = validateRecord(record, whitelistedAddresses);
 
@@ -106,7 +142,10 @@ export async function collectValidBatch(
         "record rejected during re-validation",
       );
 
-      await deps.recordSignatureMismatch(verdict.recordId, verdict.reason);
+      await deps.alerts.recordSignatureMismatch(
+        verdict.recordId,
+        verdict.reason,
+      );
       continue;
     }
 
@@ -136,24 +175,6 @@ export async function collectValidBatch(
   };
 }
 
-export type SubmitAndConfirmResult =
-  | {
-      status: "confirmed";
-      block: BlockRef;
-      txHash: string | null;
-      stageMs: { submit: number; confirm: number };
-    }
-  | {
-      status: "submitted";
-      txHash: string;
-      stageMs: { submit: number; confirm: number };
-    }
-  | {
-      status: "failed";
-      errorMessage: string;
-      stageMs: { submit: number; confirm: number };
-    };
-
 /**
  * Submits a persisted batch's root and waits for confirmations
  * before this same cycle ends. A `RevertedTransactionError` from
@@ -162,21 +183,13 @@ export type SubmitAndConfirmResult =
  * guessing at its fate; Phase 0 reconciles it next cycle.
  */
 export async function submitAndConfirmBatch(
-  deps: Pick<
-    CycleDeps,
-    | "findRootOnChain"
-    | "submitRoot"
-    | "awaitConfirmation"
-    | "markSubmitted"
-    | "markConfirmed"
-    | "markFailed"
-  >,
+  deps: Pick<CycleDeps, "chain" | "batches">,
   batch: { id: number; merkleRoot: string; size: number },
   options: { confirmations: number; confirmationTimeoutMs: number },
   logger: Logger,
 ): Promise<SubmitAndConfirmResult> {
   const submitStart = performance.now();
-  const alreadyOnChain = await deps.findRootOnChain(batch.merkleRoot);
+  const alreadyOnChain = await deps.chain.findRootOnChain(batch.merkleRoot);
 
   /**
    * Check if the root exists to avoid unnecessary send.
@@ -184,7 +197,7 @@ export async function submitAndConfirmBatch(
    * conditions across multiple instances of the anchor-service.
    */
   if (alreadyOnChain) {
-    await deps.markConfirmed(batch.id, alreadyOnChain);
+    await deps.batches.markConfirmed(batch.id, alreadyOnChain);
 
     return {
       status: "confirmed",
@@ -201,7 +214,11 @@ export async function submitAndConfirmBatch(
    * If submission fails, mark the batch as failed and return the error.
    */
   try {
-    result = await deps.submitRoot(batch.merkleRoot, batch.size, batch.id);
+    result = await deps.chain.submitRoot(
+      batch.merkleRoot,
+      batch.size,
+      batch.id,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
@@ -210,7 +227,7 @@ export async function submitAndConfirmBatch(
       "failed to submit new batch",
     );
 
-    await deps.markFailed(batch.id, message);
+    await deps.batches.markFailed(batch.id, message);
     return {
       status: "failed",
       errorMessage: message,
@@ -222,7 +239,7 @@ export async function submitAndConfirmBatch(
    * Safeguard against racing conditions after the submission of a root
    */
   if (result.status === "already-on-chain") {
-    const block = await deps.findRootOnChain(batch.merkleRoot);
+    const block = await deps.chain.findRootOnChain(batch.merkleRoot);
 
     /**
      * This should never happen, but if it does,
@@ -232,7 +249,7 @@ export async function submitAndConfirmBatch(
     if (!block) {
       const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
       logger.error({ batchId: batch.id }, message);
-      await deps.markFailed(batch.id, message);
+      await deps.batches.markFailed(batch.id, message);
       return {
         status: "failed",
         errorMessage: message,
@@ -240,7 +257,7 @@ export async function submitAndConfirmBatch(
       };
     }
 
-    await deps.markConfirmed(batch.id, block);
+    await deps.batches.markConfirmed(batch.id, block);
     return {
       status: "confirmed",
       block,
@@ -251,7 +268,7 @@ export async function submitAndConfirmBatch(
 
   const submitMs = performance.now() - submitStart;
   const txHash = result.tx.hash;
-  await deps.markSubmitted(batch.id, txHash);
+  await deps.batches.markSubmitted(batch.id, txHash);
 
   const confirmStart = performance.now();
   /**
@@ -259,13 +276,13 @@ export async function submitAndConfirmBatch(
    * If the transaction is reverted, mark the batch as failed.
    */
   try {
-    const block = await deps.awaitConfirmation(
+    const block = await deps.chain.awaitConfirmation(
       txHash,
       options.confirmations,
       options.confirmationTimeoutMs,
     );
 
-    await deps.markConfirmed(batch.id, block);
+    await deps.batches.markConfirmed(batch.id, block);
     return {
       status: "confirmed",
       block,
@@ -278,7 +295,7 @@ export async function submitAndConfirmBatch(
     if (error instanceof RevertedTransactionError) {
       const message = `transaction ${txHash} was mined but reverted`;
       logger.warn({ batchId: batch.id, txHash }, message);
-      await deps.markFailed(batch.id, message);
+      await deps.batches.markFailed(batch.id, message);
       return {
         status: "failed",
         errorMessage: message,
@@ -298,13 +315,6 @@ export async function submitAndConfirmBatch(
       stageMs: { submit: submitMs, confirm: confirmMs },
     };
   }
-}
-
-export interface CycleOptions {
-  cycleNumber: number;
-  whitelistedAddresses: string[];
-  confirmations: number;
-  confirmationTimeoutMs: number;
 }
 
 /**
@@ -356,7 +366,10 @@ export async function runCycle(
 
   // Phase 4
   const { result: batchId, ms: persistMs } = await timed(() =>
-    deps.persistBatch({ root: collected.root, entries: collected.entries }),
+    deps.batches.persistBatch({
+      root: collected.root,
+      entries: collected.entries,
+    }),
   );
 
   if (shouldAbort()) {
@@ -465,22 +478,31 @@ export function createCycleDeps(
         },
         logger,
       ),
-    streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
-    recordSignatureMismatch: (recordId, details) =>
-      dbRecordSignatureMismatch(pool, recordId, details),
-    persistBatch: (batch) => dbPersistBatch(pool, batch),
-    findRootOnChain: (root) =>
-      chainFindRootOnChain(chain.contract, chain.provider, root),
-    submitRoot: (root, size, batchId) =>
-      chainSubmitRoot(chain.contract, chain.provider, root, size, batchId, {
-        retries: config.txRetries,
-        maxFeeGwei: config.maxFeeGwei,
-      }),
-    awaitConfirmation: (txHash, confirmations, timeoutMs) =>
-      chainAwaitConfirmation(provider, txHash, confirmations, timeoutMs),
-    markSubmitted: (batchId, txHash) => dbMarkSubmitted(pool, batchId, txHash),
-    markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
-    markFailed: (batchId, errorMessage) =>
-      dbMarkFailed(pool, batchId, errorMessage),
+    records: {
+      streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
+    },
+    chain: {
+      findRootOnChain: (root) =>
+        chainFindRootOnChain(chain.contract, provider, root),
+      submitRoot: (root, size, batchId) =>
+        chainSubmitRoot(chain.contract, provider, root, size, batchId, {
+          retries: config.txRetries,
+          maxFeeGwei: config.maxFeeGwei,
+        }),
+      awaitConfirmation: (txHash, confirmations, timeoutMs) =>
+        chainAwaitConfirmation(provider, txHash, confirmations, timeoutMs),
+    },
+    batches: {
+      persistBatch: (batch) => dbPersistBatch(pool, batch),
+      markSubmitted: (batchId, txHash) =>
+        dbMarkSubmitted(pool, batchId, txHash),
+      markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
+      markFailed: (batchId, errorMessage) =>
+        dbMarkFailed(pool, batchId, errorMessage),
+    },
+    alerts: {
+      recordSignatureMismatch: (recordId, details) =>
+        dbRecordSignatureMismatch(pool, recordId, details),
+    },
   };
 }
