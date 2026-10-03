@@ -36,53 +36,73 @@ The scheduler's only real job beyond triggering the cycle on time is **overlap p
 On `SIGTERM` or `SIGINT`, the process does not exit immediately:
 
 1. The croner job is stopped (`cron.stop()`) — no new cycle will ever start after this point.
-2. A cooperative abort flag is flipped. The *currently running* cycle, if any, reads this flag at exactly one checkpoint (see Phase 4/5 below) and, if set, stops cleanly instead of starting a blockchain transaction.
+2. A cooperative abort flag is flipped. The *currently running* cycle, if any, reads this flag at two checkpoints per chunk (see Phase 4/5 and §2.1 below) and, if set, stops cleanly instead of starting a blockchain transaction or a new chunk's work.
 3. If a cycle is in flight, the shutdown sequence waits for it to finish — but only up to `SHUTDOWN_GRACE_MS` (default: 600,000 ms / 10 minutes, which must comfortably exceed the longest realistic confirmation wait).
 4. If the in-flight cycle finishes within the grace period, the database pool is closed and the chain provider is destroyed, and the process exits cleanly.
 5. If the grace period elapses first (the cycle is genuinely stuck — for example, waiting on a transaction that will never confirm), the process hard-exits with a non-zero code instead of waiting indefinitely or risking a partial shutdown on a stuck cycle.
 
-The cooperative abort checkpoint is placed at exactly one point in the whole cycle: right after Phase 4 (persist) and before Phase 5 (submit). Every earlier phase is redundant to interrupt, because croner's `stop()` already guarantees no *new* cycle starts; and every later phase (submit/confirm) is deliberately left to run to completion once started, so a transaction is never abandoned mid-flight — see Phase 6 for why an interrupted confirmation wait is still safe.
+The cooperative abort checkpoint is placed right after Phase 4 (persist) and before Phase 5 (submit), for the chunk currently in flight — every earlier phase within that chunk is redundant to interrupt, because croner's `stop()` already guarantees no *new* cycle starts; and every later phase (submit/confirm) is deliberately left to run to completion once started, so a transaction is never abandoned mid-flight — see Phase 6 for why an interrupted confirmation wait is still safe. A second checkpoint, between chunks, lets a multi-chunk cycle (§2.1) stop before starting a new chunk's work entirely, once the current one has fully resolved.
 
 ---
 
 ## 2. The Execution Cycle
 
-Each scheduled tick runs exactly one execution cycle, implemented by `runCycle` (`src/cycle.ts`). A cycle is a strict sequence of eight phases, numbered 0-7 to match the design's own phase numbering (Phase 0 is a "before everything else" phase, not the first step of building a new batch).
+Each scheduled tick runs exactly one execution cycle, implemented by `runCycle` (`src/cycle.ts`). A cycle is Phase 0 once, followed by Phases 1-6 run once *per chunk* (§2.1), followed by Phase 7 once — numbered 0-7 to match the design's own phase numbering (Phase 0 is a "before everything else" phase, Phase 7 an "after everything" one; neither is part of the repeating part of the cycle).
 
 ```mermaid
 flowchart TD
     Start(["Scheduled tick (croner)"]) --> P0["Phase 0 — Reconcile in-flight batches"]
-    P0 --> P1["Phase 1 — Scan un-anchored records"]
-    P1 --> P2["Phase 2 — Re-validate signature + whitelist"]
-    P2 --> D1{"Any valid records?"}
-    D1 -- No --> S1["Phase 7 — Summary: nothing-to-anchor"]
+    P0 --> Open["Open one record stream for the whole cycle"]
+    Open --> P1["Phase 1 — Scan up to maxBatchSize records<br/>(or everything, if unset)"]
+    P1 --> D0{"Scanned zero records?"}
+    D0 -- Yes --> S1["Phase 7 — Summary"]
+    D0 -- No --> P2["Phase 2 — Re-validate signature + whitelist"]
+    P2 --> D1{"Any valid records this chunk?"}
+    D1 -- No --> D3
     D1 -- Yes --> P3["Phase 3 — Build Merkle tree"]
-    P3 --> P4["Phase 4 — Persist batch (status: pending)"]
+    P3 --> P4["Phase 4 — Persist chunk's batch (status: pending)"]
     P4 --> D2{"Shutdown requested?"}
-    D2 -- Yes --> S2["Phase 7 — Summary: aborted<br/>(batch stays pending)"]
+    D2 -- Yes --> S2["Phase 7 — Summary: aborted<br/>(this batch stays pending)"]
     D2 -- No --> P5["Phase 5 — Submit root on-chain"]
     P5 --> P6["Phase 6 — Await confirmation"]
-    P6 --> S3["Phase 7 — Summary: confirmed / submitted / failed"]
+    P6 --> D3{"maxBatchSize set, and not shutting down?"}
+    D3 -- Yes --> P1
+    D3 -- No --> S3["Phase 7 — Summary"]
     S1 --> End(["Cycle ends"])
     S2 --> End
     S3 --> End
 ```
 
-The same eight phases, as a plain-text list:
+The same phases, as a plain-text list — Phases 1-6 repeat once per chunk when `ANCHOR_MAX_BATCH_SIZE` is configured, exactly once otherwise:
 
 ```text
 Phase 0  Reconcile in-flight batches (left over from a previous cycle/crash)
-Phase 1  Scan for un-anchored records
-Phase 2  Re-validate each record (signature + whitelist)
-Phase 3  Build the Merkle tree
-Phase 4  Persist the batch (durable, before anything touches the chain)
-  ── cooperative shutdown checkpoint ──
-Phase 5  Submit the root on-chain
-Phase 6  Await confirmation
-Phase 7  Assemble and log the cycle summary
+┌─ repeat once per chunk ──────────────────────────────────────
+│ Phase 1  Scan up to maxBatchSize un-anchored records (or everything, if unset)
+│ Phase 2  Re-validate each record (signature + whitelist)
+│ Phase 3  Build the Merkle tree
+│ Phase 4  Persist the chunk's batch (durable, before anything touches the chain)
+│   ── cooperative shutdown checkpoint (per chunk) ──
+│ Phase 5  Submit the root on-chain
+│ Phase 6  Await confirmation
+│   ── cooperative shutdown checkpoint (between chunks) ──
+└───────────────────────────────────────────────────────────────
+Phase 7  Assemble and log the cycle summary (aggregated across every chunk)
 ```
 
-If, after Phase 1-2, there are zero valid records to anchor, the cycle short-circuits straight to Phase 7 with a `nothing-to-anchor` summary — Phases 3-6 never run, and no empty batch is ever created.
+If a chunk scans zero records, the loop stops — the stream is genuinely exhausted, there is nothing left for any further chunk to find. If a chunk scans records but every one is rejected in Phase 2, Phases 3-6 are skipped for *that chunk* (no empty batch is ever created), but the loop still continues to the next chunk when `ANCHOR_MAX_BATCH_SIZE` is set — the rejected records simply aren't excluded from being scanned again, and the open stream has already moved past them regardless. If zero chunks ever produce a batch, the cycle's overall summary is `nothing-to-anchor`.
+
+### 2.1 Chunking via `ANCHOR_MAX_BATCH_SIZE`
+
+**Why:** Phase 2 holds every valid record's leaf in memory before Phase 3 can build one tree from them, and Phase 3's tree itself is `O(records)` in memory on top of that. Against a large enough backlog of un-anchored records, an unbounded single batch can exhaust the process's memory — observed directly at 500,000 records in practice. `ANCHOR_MAX_BATCH_SIZE` (optional; unset means "no limit, exactly today's single-batch behavior") caps how many records Phases 1-3 ever hold in memory for one batch, by capping how many records Phase 1 scans before handing off to Phase 4-6 and starting a fresh chunk.
+
+**Mechanism:** `runCycle` opens exactly **one** record stream for the whole cycle (`deps.records.streamUnanchoredRecords()`, called once, not once per chunk) and passes that same stream into `collectValidBatch` (`src/cycle.ts`) once per chunk, each time asking for at most `ANCHOR_MAX_BATCH_SIZE` more records. This is deliberately a single continuous SQL cursor sliced on the TypeScript side, not one SQL query per chunk: re-querying per chunk would mean Postgres re-running the full sorted anti-join (`NOT EXISTS` against `anchor_records`) from scratch for every chunk, and would reopen the exact infinite-loop risk this design avoids — a chunk where *every* record gets rejected is never excluded by `NOT EXISTS` (a rejected record has no `anchor_records` row), so re-running the same query would just re-fetch the identical stuck records forever. A single continuous cursor never has this problem: it only ever moves forward, so a fully-rejected chunk is simply consumed and passed by, never re-fetched.
+
+**Stopping the loop:** a chunk reporting zero records scanned is the only true "exhausted" signal and always stops the loop. When `ANCHOR_MAX_BATCH_SIZE` is unset, the loop also always stops after exactly one chunk — an unbounded `collectValidBatch` call drains the entire stream by construction, so there is never a second chunk to try.
+
+**Per-chunk independence:** each chunk is persisted, submitted, and confirmed exactly like today's single batch, entirely independently of every other chunk in the same cycle. One chunk hitting a structural failure (e.g. `OwnableUnauthorizedAccount`) does not stop the loop from attempting the remaining chunks — they are unrelated batches, and skipping them would only delay their legitimate progress. (In practice, a structural failure *will* fail identically for every subsequent chunk too, but that costs nothing beyond the attempt itself, and Phase 0 already retries every `failed` batch indefinitely regardless of how many there are.)
+
+**Cycle-level status roll-up:** since one cycle can now produce several batches with different outcomes, the cycle's own `status` is a roll-up across every chunk's `BatchOutcome` (`src/metrics.ts`), worst-case-wins: `aborted` (shutdown interrupted the loop) beats `failed` (any chunk failed) beats `submitted` (any chunk's confirmation is still unresolved) beats `confirmed` (every chunk confirmed); zero chunks at all is `nothing-to-anchor`.
 
 ### Phase 0 — Reconcile In-Flight Batches
 
@@ -103,9 +123,9 @@ This design means the system has **no automatic batch abandonment**: a batch kee
 
 ### Phase 1 — Scan Un-Anchored Records
 
-**Responsibility:** find every record that has not yet been anchored.
+**Responsibility:** find the next slice of records that have not yet been anchored.
 
-Implemented by `streamUnanchoredRecords` (`src/records-source.ts`): a single SQL query selects every row in `records` with no matching row in `anchor_records` (`NOT EXISTS`), ordered by `id`. The query is executed as a **stream** (`pg-query-stream`), fetching rows in batches of 10,000 by default, so the daemon's memory usage is bounded by the size of one fetch batch rather than by the total number of un-anchored records — this matters because the scan is expected to run against potentially very large backlogs.
+Implemented by `streamUnanchoredRecords` (`src/records-source.ts`): a single SQL query selects every row in `records` with no matching row in `anchor_records` (`NOT EXISTS`), ordered by `id`. The query is executed as a **stream** (`pg-query-stream`), fetching rows in batches of 10,000 by default, so the daemon's memory usage for a single page of the cursor is bounded regardless of the total number of un-anchored records. `runCycle` opens this stream exactly once per cycle; each chunk's Phase 1 is `collectValidBatch` (`src/cycle.ts`) pulling at most `ANCHOR_MAX_BATCH_SIZE` more records from that same open stream, not a fresh query — see §2.1.
 
 ### Phase 2 — Re-validate Each Record
 
@@ -139,7 +159,7 @@ Implemented by `persistBatch` (`src/batch-repository.ts`), as a single database 
 
 Both steps happen inside the same transaction, so a batch's membership is atomic: either every one of its records is durably pinned to it, or none are. This ordering — persist first, submit second — is deliberate: once this phase completes, the batch exists durably in the database with a `pending` status, so even if the process crashes immediately afterward, Phase 0 of the *next* cycle will find it and submit it. No batch's membership is ever decided by, or dependent on, anything that happens on-chain.
 
-This is also the cooperative shutdown checkpoint described in §1.3: immediately after this phase, and before Phase 5, `runCycle` checks the shutdown-requested flag. If it is set, the cycle stops here — the batch is left `pending` in the database (safe, since Phase 0 will pick it up on the next process start) and Phases 5-6 never run, so a shutdown never interrupts an in-flight blockchain transaction.
+This is also the cooperative shutdown checkpoint described in §1.3: immediately after this phase, and before Phase 5, `runCycle` checks the shutdown-requested flag. If it is set, the cycle stops here — this chunk's batch is left `pending` in the database (safe, since Phase 0 will pick it up on the next process start) and Phases 5-6 never run for it, so a shutdown never interrupts an in-flight blockchain transaction. A *second*, separate checkpoint exists between chunks (after a chunk's Phase 6 completes, before the next chunk's Phase 1 begins) — see §2.1 — so shutdown can also stop the loop from starting new, unrelated work without needing to interrupt a chunk already in flight.
 
 ### Phase 5 — Submit the Root On-Chain
 
@@ -171,13 +191,13 @@ This is why Phase 6 never needs its own retry loop: an inconclusive wait simply 
 
 **Responsibility:** assemble one structured record of everything this cycle did, for logging and future analysis.
 
-Implemented by `buildCycleSummary` (`src/metrics.ts`). Every cycle — whether it anchored a batch, found nothing to anchor, was aborted for shutdown, or failed — ends by emitting exactly one structured summary, containing:
+Implemented by `buildCycleSummary` (`src/metrics.ts`). Every cycle — whether it anchored one or more batches, found nothing to anchor, was aborted for shutdown, or failed — ends by emitting exactly one structured summary, containing:
 
-- the cycle number and its final `status` (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `aborted`);
+- the cycle number and its rolled-up final `status` (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `aborted` — see §2.1 for the roll-up rule across chunks);
 - Phase 0's reconciliation counts (`confirmed`/`resent`/`failed` batches resolved that cycle);
-- how many records were scanned and how many were rejected in Phase 2;
-- how many records ended up in the batch, its root, its transaction hash, and its block number (whichever of these apply to that cycle's outcome — most are `null` for a `nothing-to-anchor` cycle);
-- a millisecond timing breakdown per phase (so a slow cycle can be diagnosed by which specific phase took the time), and the cycle's total duration;
+- how many records were scanned and how many were rejected across every chunk this cycle ran;
+- `batches: BatchOutcome[]` — one entry per chunk that produced a batch (`root`, `size`, `status`, `txHash`, `blockNumber`, `gasUsed`, `gasPrice`), empty for a `nothing-to-anchor` cycle;
+- a millisecond timing breakdown per phase, summed across every chunk (so a slow cycle can be diagnosed by which specific phase took the time), and the cycle's total duration;
 - a peak memory (RSS) snapshot, to catch memory growth from very large scans before it becomes an operational problem.
 
 This summary is the daemon's only structured, machine-parseable output about its own behavior — it is what an operator (or the benchmark harness under `apps/anchor-service/bench/`) would read to understand what a given cycle actually did.

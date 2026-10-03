@@ -36,53 +36,73 @@ A única responsabilidade real do agendador, além de disparar o ciclo no horár
 Ao receber `SIGTERM` ou `SIGINT`, o processo não encerra imediatamente:
 
 1. O job do croner é parado (`cron.stop()`) — nenhum novo ciclo começará a partir deste ponto.
-2. Uma flag cooperativa de aborto é ativada. O ciclo *atualmente em execução*, se houver, lê essa flag em exatamente um checkpoint (ver Fase 4/5 abaixo) e, se estiver ativada, para de forma limpa em vez de iniciar uma transação na blockchain.
+2. Uma flag cooperativa de aborto é ativada. O ciclo *atualmente em execução*, se houver, lê essa flag em dois checkpoints por chunk (ver Fase 4/5 e §2.1 abaixo) e, se estiver ativada, para de forma limpa em vez de iniciar uma transação na blockchain ou o trabalho de um novo chunk.
 3. Se houver um ciclo em andamento, a sequência de encerramento espera por ele terminar — mas apenas até `SHUTDOWN_GRACE_MS` (padrão: 600.000 ms / 10 minutos, que precisa exceder confortavelmente a mais longa espera de confirmação realista).
 4. Se o ciclo em andamento termina dentro do período de tolerância, o pool do banco é fechado e o provider da chain é destruído, e o processo encerra de forma limpa.
 5. Se o período de tolerância se esgota primeiro (o ciclo está genuinamente travado — por exemplo, esperando por uma transação que nunca confirmará), o processo encerra abruptamente (_hard-exit_) com um código de saída diferente de zero, em vez de esperar indefinidamente ou arriscar um encerramento parcial sobre um ciclo travado.
 
-O checkpoint cooperativo de aborto é colocado em exatamente um ponto de todo o ciclo: logo após a Fase 4 (persistência) e antes da Fase 5 (submissão). Interromper qualquer fase anterior seria redundante, pois o `stop()` do croner já garante que nenhum *novo* ciclo comece; e qualquer fase posterior (submissão/confirmação) é deliberadamente deixada para rodar até o fim uma vez iniciada, de modo que uma transação nunca é abandonada no meio do caminho — ver Fase 6 para entender por que uma espera de confirmação interrompida ainda é segura.
+O checkpoint cooperativo de aborto é colocado logo após a Fase 4 (persistência) e antes da Fase 5 (submissão), para o chunk atualmente em andamento — qualquer fase anterior dentro desse chunk seria redundante de interromper, pois o `stop()` do croner já garante que nenhum *novo* ciclo comece; e qualquer fase posterior (submissão/confirmação) é deliberadamente deixada para rodar até o fim uma vez iniciada, de modo que uma transação nunca é abandonada no meio do caminho — ver Fase 6 para entender por que uma espera de confirmação interrompida ainda é segura. Um segundo checkpoint, entre chunks, permite que um ciclo com múltiplos chunks (§2.1) pare antes de iniciar o trabalho de um novo chunk, uma vez que o atual tenha sido totalmente resolvido.
 
 ---
 
 ## 2. O Ciclo de Execução
 
-Cada disparo agendado executa exatamente um ciclo de execução, implementado por `runCycle` (`src/cycle.ts`). Um ciclo é uma sequência estrita de oito fases, numeradas de 0 a 7 para corresponder à própria numeração de fases do design (a Fase 0 é uma fase "antes de tudo o mais", não o primeiro passo de construção de um novo lote).
+Cada disparo agendado executa exatamente um ciclo de execução, implementado por `runCycle` (`src/cycle.ts`). Um ciclo é a Fase 0 uma única vez, seguida pelas Fases 1-6 executadas uma vez *por chunk* (§2.1), seguidas pela Fase 7 uma única vez — numeradas de 0 a 7 para corresponder à própria numeração de fases do design (a Fase 0 é uma fase "antes de tudo o mais", a Fase 7 uma fase "depois de tudo"; nenhuma das duas faz parte da parte repetida do ciclo).
 
 ```mermaid
 flowchart TD
     Start(["Disparo agendado (croner)"]) --> P0["Fase 0 — Reconciliar lotes em andamento"]
-    P0 --> P1["Fase 1 — Varrer registros não ancorados"]
-    P1 --> P2["Fase 2 — Revalidar assinatura + whitelist"]
-    P2 --> D1{"Algum registro válido?"}
-    D1 -- Não --> S1["Fase 7 — Resumo: nothing-to-anchor"]
+    P0 --> Open["Abre um único stream de registros para todo o ciclo"]
+    Open --> P1["Fase 1 — Varrer até maxBatchSize registros<br/>(ou todos, se não configurado)"]
+    P1 --> D0{"Varreu zero registros?"}
+    D0 -- Sim --> S1["Fase 7 — Resumo"]
+    D0 -- Não --> P2["Fase 2 — Revalidar assinatura + whitelist"]
+    P2 --> D1{"Algum registro válido neste chunk?"}
+    D1 -- Não --> D3
     D1 -- Sim --> P3["Fase 3 — Construir Árvore de Merkle"]
-    P3 --> P4["Fase 4 — Persistir lote (status: pending)"]
+    P3 --> P4["Fase 4 — Persistir lote do chunk (status: pending)"]
     P4 --> D2{"Encerramento solicitado?"}
-    D2 -- Sim --> S2["Fase 7 — Resumo: aborted<br/>(lote permanece pending)"]
+    D2 -- Sim --> S2["Fase 7 — Resumo: aborted<br/>(este lote permanece pending)"]
     D2 -- Não --> P5["Fase 5 — Submeter raiz on-chain"]
     P5 --> P6["Fase 6 — Aguardar confirmação"]
-    P6 --> S3["Fase 7 — Resumo: confirmed / submitted / failed"]
+    P6 --> D3{"maxBatchSize configurado, e sem encerramento?"}
+    D3 -- Sim --> P1
+    D3 -- Não --> S3["Fase 7 — Resumo"]
     S1 --> End(["Ciclo termina"])
     S2 --> End
     S3 --> End
 ```
 
-As mesmas oito fases, em formato de lista de texto simples:
+As mesmas fases, em formato de lista de texto simples — as Fases 1-6 se repetem uma vez por chunk quando `ANCHOR_MAX_BATCH_SIZE` está configurado, e exatamente uma vez quando não está:
 
 ```text
 Fase 0  Reconciliar lotes em andamento (deixados por um ciclo/crash anterior)
-Fase 1  Varrer registros ainda não ancorados
-Fase 2  Revalidar cada registro (assinatura + whitelist)
-Fase 3  Construir a Árvore de Merkle
-Fase 4  Persistir o lote (de forma durável, antes de qualquer contato com a chain)
-  ── checkpoint cooperativo de encerramento ──
-Fase 5  Submeter a raiz on-chain
-Fase 6  Aguardar confirmação
-Fase 7  Montar e registrar o resumo do ciclo
+┌─ repete uma vez por chunk ───────────────────────────────────
+│ Fase 1  Varrer até maxBatchSize registros não ancorados (ou todos, se não configurado)
+│ Fase 2  Revalidar cada registro (assinatura + whitelist)
+│ Fase 3  Construir a Árvore de Merkle
+│ Fase 4  Persistir o lote do chunk (de forma durável, antes de qualquer contato com a chain)
+│   ── checkpoint cooperativo de encerramento (por chunk) ──
+│ Fase 5  Submeter a raiz on-chain
+│ Fase 6  Aguardar confirmação
+│   ── checkpoint cooperativo de encerramento (entre chunks) ──
+└───────────────────────────────────────────────────────────────
+Fase 7  Montar e registrar o resumo do ciclo (agregado entre todos os chunks)
 ```
 
-Se, após as Fases 1-2, restarem zero registros válidos para ancorar, o ciclo salta diretamente para a Fase 7 com um resumo do tipo `nothing-to-anchor` — as Fases 3-6 nunca são executadas, e nenhum lote vazio é jamais criado.
+Se um chunk varre zero registros, o laço para — o stream está genuinamente exaurido, não há mais nada para qualquer chunk futuro encontrar. Se um chunk varre registros mas todos são rejeitados na Fase 2, as Fases 3-6 são puladas para *aquele chunk* (nenhum lote vazio é jamais criado), mas o laço continua para o próximo chunk quando `ANCHOR_MAX_BATCH_SIZE` está configurado — os registros rejeitados simplesmente não são excluídos de uma nova varredura, e o stream aberto já avançou além deles de qualquer forma. Se nenhum chunk produzir um lote, o resumo geral do ciclo é `nothing-to-anchor`.
+
+### 2.1 Chunking via `ANCHOR_MAX_BATCH_SIZE`
+
+**Por quê:** a Fase 2 mantém em memória a leaf de cada registro válido antes que a Fase 3 possa construir uma única árvore a partir delas, e a própria árvore da Fase 3 é `O(registros)` em memória, por cima disso. Contra um volume acumulado grande o suficiente de registros não ancorados, um único lote sem limite pode esgotar a memória do processo — observado diretamente com 500.000 registros na prática. `ANCHOR_MAX_BATCH_SIZE` (opcional; não configurado significa "sem limite, exatamente o comportamento de lote único de hoje") limita quantos registros as Fases 1-3 mantêm em memória para um lote, limitando quantos registros a Fase 1 varre antes de passar o controle para as Fases 4-6 e iniciar um novo chunk.
+
+**Mecanismo:** `runCycle` abre exatamente **um** stream de registros para todo o ciclo (`deps.records.streamUnanchoredRecords()`, chamado uma vez, não uma vez por chunk) e passa esse mesmo stream para `collectValidBatch` (`src/cycle.ts`) uma vez por chunk, pedindo a cada vez no máximo `ANCHOR_MAX_BATCH_SIZE` registros adicionais. Isso é deliberadamente um único cursor SQL contínuo, fatiado do lado do TypeScript, e não uma consulta SQL por chunk: reconsultar por chunk significaria o Postgres re-executando do zero o anti-join ordenado completo (`NOT EXISTS` contra `anchor_records`) para cada chunk, e reabriria exatamente o risco de laço infinito que este design evita — um chunk em que *todo* registro é rejeitado nunca é excluído por `NOT EXISTS` (um registro rejeitado não possui linha em `anchor_records`), então reexecutar a mesma consulta simplesmente rebuscaria para sempre os mesmos registros travados. Um cursor contínuo único nunca tem esse problema: ele só avança para frente, então um chunk totalmente rejeitado é simplesmente consumido e deixado atrás, nunca rebuscado.
+
+**Parando o laço:** um chunk reportando zero registros varridos é o único sinal verdadeiro de "exaurido" e sempre para o laço. Quando `ANCHOR_MAX_BATCH_SIZE` não está configurado, o laço também sempre para depois de exatamente um chunk — uma chamada sem limite a `collectValidBatch` esgota o stream inteiro por construção, então nunca há um segundo chunk a tentar.
+
+**Independência entre chunks:** cada chunk é persistido, submetido e confirmado exatamente como o lote único de hoje, de forma inteiramente independente de todo outro chunk do mesmo ciclo. Um chunk sofrendo uma falha estrutural (ex: `OwnableUnauthorizedAccount`) não impede o laço de tentar os chunks restantes — são lotes não relacionados, e pulá-los apenas atrasaria seu progresso legítimo. (Na prática, uma falha estrutural *vai* falhar de forma idêntica em todo chunk subsequente também, mas isso não custa nada além da própria tentativa, e a Fase 0 já re-tenta todo lote `failed` indefinidamente, independentemente de quantos existam.)
+
+**Consolidação do status no nível do ciclo:** como um único ciclo agora pode produzir vários lotes com resultados diferentes, o `status` do próprio ciclo é uma consolidação entre o `BatchOutcome` (`src/metrics.ts`) de cada chunk, "o pior caso vence": `aborted` (encerramento interrompeu o laço) vence `failed` (algum chunk falhou) vence `submitted` (a confirmação de algum chunk ainda está sem resolução) vence `confirmed` (todo chunk confirmou); zero chunks é `nothing-to-anchor`.
 
 ### Fase 0 — Reconciliar Lotes em Andamento
 
@@ -103,9 +123,9 @@ Esse design implica que o sistema **não possui abandono automático de lotes**:
 
 ### Fase 1 — Varrer Registros Ainda Não Ancorados
 
-**Responsabilidade:** encontrar todo registro que ainda não foi ancorado.
+**Responsabilidade:** encontrar a próxima fatia de registros que ainda não foram ancorados.
 
-Implementada por `streamUnanchoredRecords` (`src/records-source.ts`): uma única consulta SQL seleciona toda linha em `records` que não possui uma linha correspondente em `anchor_records` (`NOT EXISTS`), ordenada por `id`. A consulta é executada como um **stream** (`pg-query-stream`), buscando linhas em lotes de 10.000 por padrão, de modo que o consumo de memória do daemon fica limitado pelo tamanho de um único lote de busca, e não pelo número total de registros não ancorados — isso importa porque a varredura pode precisar lidar com um volume acumulado potencialmente muito grande.
+Implementada por `streamUnanchoredRecords` (`src/records-source.ts`): uma única consulta SQL seleciona toda linha em `records` que não possui uma linha correspondente em `anchor_records` (`NOT EXISTS`), ordenada por `id`. A consulta é executada como um **stream** (`pg-query-stream`), buscando linhas em lotes de 10.000 por padrão, de modo que o consumo de memória para uma única página do cursor fica limitado independentemente do número total de registros não ancorados. `runCycle` abre esse stream exatamente uma vez por ciclo; a Fase 1 de cada chunk é `collectValidBatch` (`src/cycle.ts`) puxando no máximo `ANCHOR_MAX_BATCH_SIZE` registros adicionais desse mesmo stream aberto, não uma consulta nova — ver §2.1.
 
 ### Fase 2 — Revalidar Cada Registro
 
@@ -139,7 +159,7 @@ Implementada por `persistBatch` (`src/batch-repository.ts`), como uma única tra
 
 Ambas as etapas acontecem dentro da mesma transação, de modo que a composição de um lote é atômica: ou todos os seus registros ficam durativamente vinculados a ele, ou nenhum fica. Essa ordem — persistir primeiro, submeter depois — é deliberada: uma vez que essa fase é concluída, o lote existe de forma durável no banco de dados com status `pending`, então, mesmo que o processo trave logo em seguida, a Fase 0 do *próximo* ciclo o encontrará e o submeterá. A composição de nenhum lote é jamais decidida por, ou depende de, algo que acontece on-chain.
 
-Este é também o checkpoint cooperativo de encerramento descrito em §1.3: imediatamente após esta fase, e antes da Fase 5, `runCycle` verifica a flag de encerramento solicitado. Se estiver ativada, o ciclo para aqui — o lote é deixado como `pending` no banco de dados (seguro, já que a Fase 0 o pegará na próxima inicialização do processo) e as Fases 5-6 nunca são executadas, de modo que um encerramento nunca interrompe uma transação em andamento na blockchain.
+Este é também o checkpoint cooperativo de encerramento descrito em §1.3: imediatamente após esta fase, e antes da Fase 5, `runCycle` verifica a flag de encerramento solicitado. Se estiver ativada, o ciclo para aqui — o lote deste chunk é deixado como `pending` no banco de dados (seguro, já que a Fase 0 o pegará na próxima inicialização do processo) e as Fases 5-6 nunca são executadas para ele, de modo que um encerramento nunca interrompe uma transação em andamento na blockchain. Um *segundo* checkpoint, separado, existe entre chunks (depois que a Fase 6 de um chunk termina, antes que a Fase 1 do próximo chunk comece) — ver §2.1 — de modo que o encerramento também pode parar o laço de iniciar um trabalho novo e não relacionado, sem precisar interromper um chunk já em andamento.
 
 ### Fase 5 — Submeter a Raiz On-Chain
 
@@ -171,13 +191,13 @@ Implementada por `awaitConfirmation` (`src/chain-confirm.ts`), bloqueando até q
 
 **Responsabilidade:** montar um único registro estruturado de tudo o que este ciclo fez, para fins de log e análise futura.
 
-Implementada por `buildCycleSummary` (`src/metrics.ts`). Todo ciclo — tenha ele ancorado um lote, não encontrado nada para ancorar, sido abortado por encerramento, ou falhado — termina emitindo exatamente um resumo estruturado, contendo:
+Implementada por `buildCycleSummary` (`src/metrics.ts`). Todo ciclo — tenha ele ancorado um ou mais lotes, não encontrado nada para ancorar, sido abortado por encerramento, ou falhado — termina emitindo exatamente um resumo estruturado, contendo:
 
-- o número do ciclo e seu `status` final (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `aborted`);
+- o número do ciclo e seu `status` final consolidado (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `aborted` — ver §2.1 para a regra de consolidação entre chunks);
 - as contagens de reconciliação da Fase 0 (lotes `confirmed`/`resent`/`failed` resolvidos naquele ciclo);
-- quantos registros foram varridos e quantos foram rejeitados na Fase 2;
-- quantos registros acabaram no lote, sua raiz, o hash de sua transação, e o número de seu bloco (o que se aplicar ao resultado daquele ciclo — a maioria é `null` em um ciclo `nothing-to-anchor`);
-- uma decomposição do tempo em milissegundos por fase (de modo que um ciclo lento possa ser diagnosticado identificando qual fase específica consumiu o tempo), e a duração total do ciclo;
+- quantos registros foram varridos e quantos foram rejeitados em todos os chunks daquele ciclo;
+- `batches: BatchOutcome[]` — uma entrada por chunk que produziu um lote (`root`, `size`, `status`, `txHash`, `blockNumber`, `gasUsed`, `gasPrice`), vazio em um ciclo `nothing-to-anchor`;
+- uma decomposição do tempo em milissegundos por fase, somada entre todos os chunks (de modo que um ciclo lento possa ser diagnosticado identificando qual fase específica consumiu o tempo), e a duração total do ciclo;
 - uma captura de memória de pico (RSS), para detectar crescimento de memória proveniente de varreduras muito grandes antes que isso se torne um problema operacional.
 
 Esse resumo é a única saída estruturada e processável por máquina que o daemon produz sobre seu próprio comportamento — é o que um operador (ou o conjunto de benchmarks em `apps/anchor-service/bench/`) leria para entender o que um determinado ciclo de fato fez.
