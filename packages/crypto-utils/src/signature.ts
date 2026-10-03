@@ -1,4 +1,12 @@
-import { getAddress, isAddress, verifyMessage } from "ethers";
+import {
+  computeAddress,
+  getAddress,
+  getBytes,
+  hashMessage,
+  isAddress,
+  Signature,
+} from "ethers";
+import secp256k1 from "secp256k1";
 import { canonicalize } from "./canonicalizer.ts";
 import type { RecordPayload, SignableRecordContent } from "./types.ts";
 
@@ -16,8 +24,18 @@ export function recoverSignerAddress(
   signature: string,
 ): string {
   const canonicalContent = canonicalize(content);
-  // probably should be using another library to verify signatures. Maybe one that is faster and compiled with Rust or C++
-  return verifyMessage(canonicalContent, signature);
+  const digest = getBytes(hashMessage(canonicalContent));
+
+  const { r, s, yParity } = Signature.from(signature);
+  const compactSignature = getBytes(r + s.slice(2)); // ecdsaRecover wants raw r||s, not ethers' r/s/v-encoded signature
+
+  const publicKey = secp256k1.ecdsaRecover(
+    compactSignature,
+    yParity,
+    digest,
+    false,
+  );
+  return computeAddress(`0x${Buffer.from(publicKey).toString("hex")}`);
 }
 
 /**
@@ -66,11 +84,3 @@ export function isWhitelistedAddress(
     return false;
   }
 }
-
-/**
- * TODO: This is a placeholder for a faster signature verification function.
- * The current implementation uses ethers.js's verifyMessage,
- * which is the biggest bottleneck for the large-scale verification.
- * Considering using a more performant library.
- */
-function fastVerifyMessage() {}
