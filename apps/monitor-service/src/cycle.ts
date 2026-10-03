@@ -19,20 +19,28 @@ import { checkRootCount } from "./root-count-check.ts";
 import { createStaleSubmittedTracker } from "./stale-submitted-tracker.ts";
 
 export interface CycleDeps {
-  findConfirmedBatchIds(): Promise<number[]>;
-  findSubmittedBatchIds(): Promise<number[]>;
   auditBatch(batchId: number): Promise<AuditSummary>;
-  getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
-  getRootCount(): Promise<number>;
-  countTrackedBatches(): Promise<number>;
-  observeSubmittedBatch(batchId: number): boolean;
-  pruneSubmittedTracking(currentBatchIds: number[]): void;
-  recordRootDivergence(
-    batchId: number | null,
-    expectedRoot: string | null,
-    details: string,
-  ): Promise<boolean>;
-  decodeRevertName(error: unknown): string | null;
+  batches: {
+    findConfirmedBatchIds(): Promise<number[]>;
+    findSubmittedBatchIds(): Promise<number[]>;
+    countTrackedBatches(): Promise<number>;
+  };
+  chain: {
+    getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
+    getRootCount(): Promise<number>;
+    decodeRevertName(error: unknown): string | null;
+  };
+  tracking: {
+    observeSubmittedBatch(batchId: number): boolean;
+    pruneSubmittedTracking(currentBatchIds: number[]): void;
+  };
+  alerts: {
+    recordRootDivergence(
+      batchId: number | null,
+      expectedRoot: string | null,
+      details: string,
+    ): Promise<boolean>;
+  };
 }
 
 export interface MonitorCycleSummary {
@@ -77,8 +85,8 @@ export async function runMonitorCycle(
 
   const { result: rootCountResult, ms: rootCountMs } = await timed(async () => {
     const [onChainRootCount, trackedBatchCount] = await Promise.all([
-      deps.getRootCount(),
-      deps.countTrackedBatches(),
+      deps.chain.getRootCount(),
+      deps.batches.countTrackedBatches(),
     ]);
 
     return checkRootCount(onChainRootCount, trackedBatchCount);
@@ -95,12 +103,12 @@ export async function runMonitorCycle(
       message,
     );
 
-    await deps.recordRootDivergence(null, null, message);
+    await deps.alerts.recordRootDivergence(null, null, message);
     alertsFired++;
   }
 
   const { result: batchIds, ms: findMs } = await timed(() =>
-    deps.findConfirmedBatchIds(),
+    deps.batches.findConfirmedBatchIds(),
   );
 
   let batchesChecked = 0;
@@ -134,12 +142,12 @@ export async function runMonitorCycle(
         tamperedCount += summary.tamperedRecordIds.length;
         alertsFired += summary.tamperedRecordIds.length;
       } catch (error) {
-        const revertName = deps.decodeRevertName(error);
+        const revertName = deps.chain.decodeRevertName(error);
 
         if (revertName === "RootDoesNotExist") {
           const message = `batch ${batchId} is 'confirmed' in Postgres but has no on-chain BatchInfo for this batchId — possible status tampering or the anchor was never actually confirmed`;
           logger.error({ batchId }, message);
-          await deps.recordRootDivergence(batchId, null, message);
+          await deps.alerts.recordRootDivergence(batchId, null, message);
           alertsFired++;
           continue;
         }
@@ -154,10 +162,10 @@ export async function runMonitorCycle(
   });
 
   const { result: submittedIds, ms: findSubmittedMs } = await timed(() =>
-    deps.findSubmittedBatchIds(),
+    deps.batches.findSubmittedBatchIds(),
   );
 
-  deps.pruneSubmittedTracking(submittedIds);
+  deps.tracking.pruneSubmittedTracking(submittedIds);
 
   let submittedBatchesStaleChecked = 0;
 
@@ -167,24 +175,24 @@ export async function runMonitorCycle(
         break;
       }
 
-      if (!deps.observeSubmittedBatch(batchId)) {
+      if (!deps.tracking.observeSubmittedBatch(batchId)) {
         continue; // still within the normal in-flight grace period
       }
 
       submittedBatchesStaleChecked++;
 
       try {
-        await deps.getBatchInfo(batchId);
+        await deps.chain.getBatchInfo(batchId);
         // Landed on-chain — Postgres just hasn't reconciled its status
         // yet. Nothing to do; the next anchor-service reconcile cycle
         // will catch up.
       } catch (error) {
-        const revertName = deps.decodeRevertName(error);
+        const revertName = deps.chain.decodeRevertName(error);
 
         if (revertName === "RootDoesNotExist") {
           const message = `batch ${batchId} has been 'submitted' with no on-chain BatchInfo for longer than expected — likely fabricated or permanently stuck`;
           logger.error({ batchId }, message);
-          await deps.recordRootDivergence(batchId, null, message);
+          await deps.alerts.recordRootDivergence(batchId, null, message);
           alertsFired++;
           continue;
         }
@@ -235,17 +243,25 @@ export function createCycleDeps(
   const tracker = createStaleSubmittedTracker(options.submittedStaleMs);
 
   return {
-    findConfirmedBatchIds: () => dbFindConfirmedBatchIds(pool),
-    findSubmittedBatchIds: () => dbFindSubmittedBatchIds(pool),
     auditBatch: (batchId) => runAuditBatch(auditDeps, batchId, logger),
-    getBatchInfo: (batchId) => auditDeps.getBatchInfo(batchId),
-    getRootCount: () => contract.getRootCount(),
-    countTrackedBatches: () => dbCountTrackedBatches(pool),
-    observeSubmittedBatch: (batchId) => tracker.observe(batchId),
-    pruneSubmittedTracking: (currentBatchIds) =>
-      tracker.pruneExcept(currentBatchIds),
-    recordRootDivergence: (batchId, expectedRoot, details) =>
-      dbRecordRootDivergence(pool, batchId, expectedRoot, details),
-    decodeRevertName,
+    batches: {
+      findConfirmedBatchIds: () => dbFindConfirmedBatchIds(pool),
+      findSubmittedBatchIds: () => dbFindSubmittedBatchIds(pool),
+      countTrackedBatches: () => dbCountTrackedBatches(pool),
+    },
+    chain: {
+      getBatchInfo: (batchId) => auditDeps.chain.getBatchInfo(batchId),
+      getRootCount: () => contract.getRootCount(),
+      decodeRevertName,
+    },
+    tracking: {
+      observeSubmittedBatch: (batchId) => tracker.observe(batchId),
+      pruneSubmittedTracking: (currentBatchIds) =>
+        tracker.pruneExcept(currentBatchIds),
+    },
+    alerts: {
+      recordRootDivergence: (batchId, expectedRoot, details) =>
+        dbRecordRootDivergence(pool, batchId, expectedRoot, details),
+    },
   };
 }

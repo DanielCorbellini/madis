@@ -14,20 +14,28 @@ import { checkAnchorCount } from "./anchor-count.ts";
 import { verifyAnchoredRecord } from "./record-verification.ts";
 
 export interface AuditDeps {
-  getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
-  countAnchoredRecords(batchId: number): Promise<number>;
-  streamAnchoredRecords(batchId: number): AsyncGenerator<AnchoredRecordEntry>;
-  recordRootDivergence(
-    batchId: number,
-    expectedRoot: string | null,
-    details: string,
-  ): Promise<boolean>;
-  recordTampered(
-    batchId: number,
-    recordId: number,
-    expectedRoot: string,
-    details: string,
-  ): Promise<boolean>;
+  chain: {
+    getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
+  };
+  records: {
+    countAnchoredRecords(batchId: number): Promise<number>;
+    streamAnchoredRecords(
+      batchId: number,
+    ): AsyncGenerator<AnchoredRecordEntry>;
+  };
+  alerts: {
+    recordRootDivergence(
+      batchId: number,
+      expectedRoot: string | null,
+      details: string,
+    ): Promise<boolean>;
+    recordTampered(
+      batchId: number,
+      recordId: number,
+      expectedRoot: string,
+      details: string,
+    ): Promise<boolean>;
+  };
 }
 
 export interface AuditSummary {
@@ -53,20 +61,22 @@ export async function auditBatch(
   batchId: number,
   logger: Logger,
 ): Promise<AuditSummary> {
-  const { root, size } = await deps.getBatchInfo(batchId);
-  const anchoredCount = await deps.countAnchoredRecords(batchId);
+  const { root, size } = await deps.chain.getBatchInfo(batchId);
+  const anchoredCount = await deps.records.countAnchoredRecords(batchId);
   const anchorCountCheck = checkAnchorCount(size, anchoredCount);
 
   if (!anchorCountCheck.complete) {
     const message = `batch ${batchId}: anchor_records count ${anchoredCount} does not match on-chain size ${size} — a pinned record was likely deleted`;
     logger.error({ batchId, onChainSize: size, anchoredCount }, message);
-    await deps.recordRootDivergence(batchId, root, message);
+    await deps.alerts.recordRootDivergence(batchId, root, message);
   }
 
   let recordsChecked = 0;
   const tamperedRecordIds: number[] = [];
 
-  for await (const { record, proof } of deps.streamAnchoredRecords(batchId)) {
+  for await (const { record, proof } of deps.records.streamAnchoredRecords(
+    batchId,
+  )) {
     recordsChecked++;
     const { verified } = verifyAnchoredRecord(record, proof, root);
 
@@ -74,7 +84,7 @@ export async function auditBatch(
       tamperedRecordIds.push(record.id);
       const message = `record ${record.id} in batch ${batchId}: recomputed leaf does not verify against its stored proof and the on-chain root — data was likely tampered with`;
       logger.error({ batchId, recordId: record.id }, message);
-      await deps.recordTampered(batchId, record.id, root, message);
+      await deps.alerts.recordTampered(batchId, record.id, root, message);
     }
   }
 
@@ -95,12 +105,19 @@ export function createAuditDeps(
   pool: Pool,
 ): AuditDeps {
   return {
-    getBatchInfo: (batchId) => contract.getBatchInfo(batchId),
-    countAnchoredRecords: (batchId) => dbCountAnchoredRecords(pool, batchId),
-    streamAnchoredRecords: (batchId) => dbStreamAnchoredRecords(pool, batchId),
-    recordRootDivergence: (batchId, expectedRoot, details) =>
-      dbRecordRootDivergence(pool, batchId, expectedRoot, details),
-    recordTampered: (batchId, recordId, expectedRoot, details) =>
-      dbRecordTampered(pool, batchId, recordId, expectedRoot, details),
+    chain: {
+      getBatchInfo: (batchId) => contract.getBatchInfo(batchId),
+    },
+    records: {
+      countAnchoredRecords: (batchId) => dbCountAnchoredRecords(pool, batchId),
+      streamAnchoredRecords: (batchId) =>
+        dbStreamAnchoredRecords(pool, batchId),
+    },
+    alerts: {
+      recordRootDivergence: (batchId, expectedRoot, details) =>
+        dbRecordRootDivergence(pool, batchId, expectedRoot, details),
+      recordTampered: (batchId, recordId, expectedRoot, details) =>
+        dbRecordTampered(pool, batchId, recordId, expectedRoot, details),
+    },
   };
 }
