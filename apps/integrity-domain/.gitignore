@@ -31,9 +31,3 @@
 
 # Snapshot cheatcodes output
 /snapshots
-
-# Agents
-.agents/
-.claude/
-AGENTS.md
-CLAUDE.md

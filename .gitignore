@@ -16,8 +16,12 @@ docs/*
 !docs/pt-br
 docs/en/*
 !docs/en/ARCHITECTURE.md
+!docs/en/ANCHOR_SERVICE_EXECUTION_CYCLE.md
+!docs/en/MONITOR_SERVICE_EXECUTION_CYCLE.md
 docs/pt-br/*
 !docs/pt-br/ARCHITECTURE.md
+!docs/pt-br/ANCHOR_SERVICE_EXECUTION_CYCLE.md
+!docs/pt-br/MONITOR_SERVICE_EXECUTION_CYCLE.md
 !docs/ArchitectureV6.png
 TODO.md
 
@@ -25,8 +29,18 @@ TODO.md
 packages/contracts-shared/src/abi
 packages/contracts-shared/src/generated
 
+# Agents
+AGENTS.md
+CLAUDE.md
+
+.agents/
+.claude/
+
 # Docker local overrides
 docker-compose.override.yml
 
 # Benchmark result dumps (apps/anchor-service/bench/perf.ts, bench/cross-chain.ts)
 apps/anchor-service/bench/results/
+
+*.test.ts
+test-db.ts
