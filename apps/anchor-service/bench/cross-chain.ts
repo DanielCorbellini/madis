@@ -124,6 +124,7 @@ interface CrossChainRow {
   status: "confirmed" | "already-on-chain" | "failed";
   txHash: string | null;
   gasUsed: string | null;
+  l1GasUsed: string | null;
   effectiveGasPrice: string | null;
   feeWei: string | null;
   feeNative: string | null;
@@ -134,6 +135,30 @@ interface CrossChainRow {
   // just makes that explicit to TypeScript so CrossChainRow[] can be passed
   // to writeResults's Array<Record<string, unknown>> parameter without a cast.
   [key: string]: string | number | null;
+}
+
+/**
+ * Combines a transaction's L2 execution gas with its L1 data-posting share.
+ * Rollups like Arbitrum charge a separate `gasUsedForL1` on top of the
+ * standard `gasUsed` — this is the transaction's pro-rata share of the cost
+ * of posting its batch's data back to L1, converted into an L2-gas-priced
+ * equivalent so it can be charged at the same `gasPrice`. ethers' typed
+ * `TransactionReceipt` doesn't model this field at all, so it's read off the
+ * *raw* JSON-RPC receipt. Chains with no such field (Sepolia, Amoy — plain
+ * L1s) simply never have it, so this reduces to the plain `gasUsed * gasPrice`
+ * everyone already expects.
+ */
+export function computeTotalFee(
+  gasUsed: bigint,
+  gasPrice: bigint,
+  rawReceipt: { gasUsedForL1?: string },
+): { totalGasUsed: bigint; l1GasUsed: bigint; feeWei: bigint } {
+  const l1GasUsed = rawReceipt.gasUsedForL1
+    ? BigInt(rawReceipt.gasUsedForL1)
+    : 0n;
+  const totalGasUsed = gasUsed + l1GasUsed;
+  const feeWei = totalGasUsed * gasPrice;
+  return { totalGasUsed, l1GasUsed, feeWei };
 }
 
 /**
@@ -156,6 +181,7 @@ async function benchmarkChain(
     chain: chainConfig.name,
     txHash: null,
     gasUsed: null,
+    l1GasUsed: null,
     effectiveGasPrice: null,
     feeWei: null,
     feeNative: null,
@@ -215,13 +241,24 @@ async function benchmarkChain(
       };
     }
 
-    const feeWei = receipt.gasUsed * receipt.gasPrice;
+    // ethers' typed TransactionReceipt doesn't model `gasUsedForL1` (the L1
+    // data-posting share rollups like Arbitrum charge on top of L2
+    // execution gas), so it's read off the raw JSON-RPC receipt directly.
+    const rawReceipt = await chain.provider.send("eth_getTransactionReceipt", [
+      result.tx.hash,
+    ]);
+    const { totalGasUsed, l1GasUsed, feeWei } = computeTotalFee(
+      receipt.gasUsed,
+      receipt.gasPrice,
+      rawReceipt,
+    );
 
     return {
       ...base,
       status: "confirmed",
       txHash: result.tx.hash,
-      gasUsed: receipt.gasUsed.toString(),
+      gasUsed: totalGasUsed.toString(),
+      l1GasUsed: l1GasUsed.toString(),
       effectiveGasPrice: receipt.gasPrice.toString(),
       feeWei: feeWei.toString(),
       feeNative: formatEther(feeWei),
