@@ -7,17 +7,28 @@ export type CycleStatus =
   | "nothing-to-anchor"
   | "aborted";
 
+/**
+ * One chunk's outcome within a cycle. `status: "pending"` only occurs when
+ * shutdown was requested right after this batch persisted, before it could
+ * ever be submitted — see `runCycle`'s per-chunk abort checkpoint.
+ */
+export interface BatchOutcome {
+  root: string;
+  size: number;
+  status: "confirmed" | "submitted" | "failed" | "pending";
+  txHash: string | null;
+  blockNumber: number | null;
+  gasUsed: string | null;
+  gasPrice: string | null;
+}
+
 export interface CycleSummary {
   cycle: number;
   reconciled: ReconcileSummary;
   scanned: number;
   rejected: number;
   batched: number;
-  root: string | null;
-  txHash: string | null;
-  blockNumber: number | null;
-  gasUsed: string | null;
-  gasPrice: string | null;
+  batches: BatchOutcome[];
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;
@@ -34,11 +45,7 @@ export function buildCycleSummary(input: {
   scanned: number;
   rejected: number;
   batched: number;
-  root: string | null;
-  txHash: string | null;
-  blockNumber: number | null;
-  gasUsed: string | null;
-  gasPrice: string | null;
+  batches: BatchOutcome[];
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;

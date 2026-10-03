@@ -25,7 +25,12 @@ import {
 } from "./chain-submit.ts";
 import { type ChainClient, createProviderAdapter } from "./chain.ts";
 import type { AnchorConfig } from "./config.ts";
-import { buildCycleSummary, type CycleSummary } from "./metrics.ts";
+import {
+  type BatchOutcome,
+  buildCycleSummary,
+  type CycleStatus,
+  type CycleSummary,
+} from "./metrics.ts";
 import {
   createReconcileDeps,
   reconcileBatches,
@@ -71,9 +76,7 @@ export interface CycleDeps {
 }
 
 export interface CollectedBatch {
-  root: string;
-  size: number;
-  entries: AnchorEntry[];
+  batch: { root: string; size: number; entries: AnchorEntry[] } | null;
   scannedCount: number;
   rejectedCount: number;
   stageMs: { scanAndValidate: number; tree: number };
@@ -84,6 +87,7 @@ export interface CycleOptions {
   whitelistedAddresses: string[];
   confirmations: number;
   confirmationTimeoutMs: number;
+  maxBatchSize: number | null;
 }
 
 export type SubmitAndConfirmResult =
@@ -105,32 +109,40 @@ export type SubmitAndConfirmResult =
     };
 
 /**
- * 1. Get every un-anchored record
- * 2. Validates each one (signature + whitelist)
- * 3. Alerts the ones that fails
- * 4. Build a Merkle Tree from the valid ones
+ * 1. Pulls up to `limit` un-anchored records from `recordStream` (or every
+ *    remaining record, if `limit` is `null`) — `recordStream` is created
+ *    once per cycle by the caller and reused across calls, so each call
+ *    picks up exactly where the previous one left off.
+ * 2. Validates each one (signature + whitelist).
+ * 3. Alerts the ones that fail.
+ * 4. Builds a Merkle tree from the valid ones.
  *
- * Returns `null` ("nothing to anchor") if zero records passed validation;
- * never calls `buildAnchorTree` with an empty array.
+ * `scannedCount`/`rejectedCount` are always real counts, even when
+ * `batch` is `null` — the caller needs `scannedCount` to tell "the stream
+ * is exhausted" (0) apart from "every record in this chunk was rejected"
+ * (>0), since only the former means there is nothing left to loop for.
+ * Never calls `buildAnchorTree` with an empty array.
  */
 export async function collectValidBatch(
-  deps: Pick<CycleDeps, "records" | "alerts">,
+  deps: Pick<CycleDeps, "alerts">,
+  recordStream: AsyncGenerator<AnchorableRecord>,
   whitelistedAddresses: string[],
   logger: Logger,
-): Promise<CollectedBatch | null> {
+  limit: number | null,
+): Promise<CollectedBatch> {
   const scanStart = performance.now();
   const leaves: LeafEntry[] = [];
   let scannedCount = 0;
   let rejectedCount = 0;
 
   /**
-   * Get all unanchored records and validate them. Those that pass validation are added to the Merkle tree,
-   * those that fail are logged and an alert is inserted.
-   *
    * The biggest bottleneck is here, ESCDA signature verification is expensive, and we have to do it for every record.
    * We could consider batching or parallelizing this in the future, but for now, we process them sequentially.
    */
-  for await (const record of deps.records.streamUnanchoredRecords()) {
+  while (limit === null || scannedCount < limit) {
+    const { value: record, done } = await recordStream.next();
+    if (done) break;
+
     scannedCount++;
     const verdict = validateRecord(record, whitelistedAddresses);
 
@@ -155,7 +167,12 @@ export async function collectValidBatch(
   const scanAndValidateMs = performance.now() - scanStart;
 
   if (leaves.length === 0) {
-    return null;
+    return {
+      batch: null,
+      scannedCount,
+      rejectedCount,
+      stageMs: { scanAndValidate: scanAndValidateMs, tree: 0 },
+    };
   }
 
   const treeStart = performance.now();
@@ -163,12 +180,14 @@ export async function collectValidBatch(
   const treeMs = performance.now() - treeStart;
 
   return {
-    root: tree.root,
-    size: tree.entries.length,
-    entries: tree.entries.map((entry) => ({
-      recordId: entry.recordId,
-      proof: entry.proof,
-    })),
+    batch: {
+      root: tree.root,
+      size: tree.entries.length,
+      entries: tree.entries.map((entry) => ({
+        recordId: entry.recordId,
+        proof: entry.proof,
+      })),
+    },
     scannedCount,
     rejectedCount,
     stageMs: { scanAndValidate: scanAndValidateMs, tree: treeMs },
@@ -271,6 +290,7 @@ export async function submitAndConfirmBatch(
   await deps.batches.markSubmitted(batch.id, txHash);
 
   const confirmStart = performance.now();
+
   /**
    * Get confirmation for the submitted transaction.
    * If the transaction is reverted, mark the batch as failed.
@@ -318,12 +338,29 @@ export async function submitAndConfirmBatch(
 }
 
 /**
+ * Rolls every chunk's outcome up into one cycle-level status. "Worst case
+ * wins": a shutdown mid-loop always wins (nothing else in the cycle matters
+ * once that's happened), then any failed chunk, then any still-unresolved
+ * ("submitted") chunk, and only "confirmed" when every chunk is. Zero
+ * chunks at all is "nothing-to-anchor", distinct from every chunk failing.
+ */
+function rollUpStatus(aborted: boolean, batches: BatchOutcome[]): CycleStatus {
+  if (aborted) return "aborted";
+  if (batches.length === 0) return "nothing-to-anchor";
+  if (batches.some((batch) => batch.status === "failed")) return "failed";
+  if (batches.some((batch) => batch.status === "submitted")) return "submitted";
+  return "confirmed";
+}
+
+/**
  * Sequences one full anchoring cycle:
  * 1. Phase 0 (reconcile in-flight batches),
- * 2. Phases 1–3 (collect a new valid batch, or "nothing to anchor"),
- * 3. Phase 4 (persist),
- * 4. Phases 5–6 (submit + await confirmation)
- * 5. Phase 7 (summary).
+ * 2. Phases 1–6 repeated once per chunk — one open record stream for the
+ *    whole cycle, sliced into `options.maxBatchSize`-sized chunks (or one
+ *    unbounded chunk, draining the entire backlog, when `maxBatchSize` is
+ *    `null`) — until a chunk scans zero records (the stream is exhausted)
+ *    or shutdown is requested,
+ * 3. Phase 7 (summary, aggregated across every chunk this cycle ran).
  */
 export async function runCycle(
   deps: CycleDeps,
@@ -338,105 +375,131 @@ export async function runCycle(
     deps.reconcileBatches(),
   );
 
-  // Phase 1-3
-  const { result: collected, ms: collectMs } = await timed(() =>
-    collectValidBatch(deps, options.whitelistedAddresses, logger),
-  );
+  const recordStream = deps.records.streamUnanchoredRecords();
 
-  if (!collected) {
-    logger.info({ cycle: options.cycleNumber }, "nothing to anchor this cycle");
+  let scanned = 0;
+  let rejected = 0;
+  let batched = 0;
+  let scanAndValidateMs = 0;
+  let treeMs = 0;
+  let persistMs = 0;
+  let submitMs = 0;
+  let confirmMs = 0;
+  const batches: BatchOutcome[] = [];
+  let aborted = false;
 
-    return buildCycleSummary({
-      cycle: options.cycleNumber,
-      reconciled,
-      scanned: 0,
-      rejected: 0,
-      batched: 0,
-      root: null,
-      txHash: null,
-      blockNumber: null,
-      gasUsed: null,
-      gasPrice: null,
-      status: "nothing-to-anchor",
-      durationMs: performance.now() - cycleStart,
-      stageMs: { reconcile: reconcileMs, collect: collectMs },
-      peakRssBytes: snapshotMemory().rssBytes,
-    });
-  }
-
-  // Phase 4
-  const { result: batchId, ms: persistMs } = await timed(() =>
-    deps.batches.persistBatch({
-      root: collected.root,
-      entries: collected.entries,
-    }),
-  );
-
-  if (shouldAbort()) {
-    logger.warn(
-      { cycle: options.cycleNumber, batchId },
-      "shutdown requested — leaving batch 'pending' for the next startup's Phase 0 to submit",
+  while (true) {
+    // Phases 1-3
+    const collected = await collectValidBatch(
+      deps,
+      recordStream,
+      options.whitelistedAddresses,
+      logger,
+      options.maxBatchSize,
     );
+    scanned += collected.scannedCount;
+    rejected += collected.rejectedCount;
+    scanAndValidateMs += collected.stageMs.scanAndValidate;
+    treeMs += collected.stageMs.tree;
 
-    return buildCycleSummary({
-      cycle: options.cycleNumber,
-      reconciled,
-      scanned: collected.scannedCount,
-      rejected: collected.rejectedCount,
-      batched: collected.entries.length,
-      root: collected.root,
-      txHash: null,
-      blockNumber: null,
-      gasUsed: null,
-      gasPrice: null,
-      status: "aborted",
-      durationMs: performance.now() - cycleStart,
-      stageMs: {
-        reconcile: reconcileMs,
-        ...collected.stageMs,
-        persist: persistMs,
-      },
-      peakRssBytes: snapshotMemory().rssBytes,
-    });
+    if (collected.scannedCount === 0) break;
+
+    if (collected.batch) {
+      const batch = collected.batch;
+
+      // Phase 4
+      const { result: batchId, ms: chunkPersistMs } = await timed(() =>
+        deps.batches.persistBatch({ root: batch.root, entries: batch.entries }),
+      );
+      persistMs += chunkPersistMs;
+      batched += batch.size;
+
+      if (shouldAbort()) {
+        aborted = true;
+        logger.warn(
+          { cycle: options.cycleNumber, batchId },
+          "shutdown requested — leaving batch 'pending' for the next startup's Phase 0 to submit",
+        );
+        batches.push({
+          root: batch.root,
+          size: batch.size,
+          status: "pending",
+          txHash: null,
+          blockNumber: null,
+          gasUsed: null,
+          gasPrice: null,
+        });
+        break;
+      }
+
+      // Phases 5-6
+      const submitResult = await submitAndConfirmBatch(
+        deps,
+        { id: batchId, merkleRoot: batch.root, size: batch.size },
+        {
+          confirmations: options.confirmations,
+          confirmationTimeoutMs: options.confirmationTimeoutMs,
+        },
+        logger,
+      );
+      submitMs += submitResult.stageMs.submit;
+      confirmMs += submitResult.stageMs.confirm;
+
+      batches.push({
+        root: batch.root,
+        size: batch.size,
+        status: submitResult.status,
+        txHash: submitResult.status === "failed" ? null : submitResult.txHash,
+        blockNumber:
+          submitResult.status === "confirmed"
+            ? submitResult.block.number
+            : null,
+        gasUsed:
+          submitResult.status === "confirmed"
+            ? (submitResult.block.gasUsed ?? null)
+            : null,
+        gasPrice:
+          submitResult.status === "confirmed"
+            ? (submitResult.block.gasPrice ?? null)
+            : null,
+      });
+    }
+
+    // An unbounded chunk (no configured max) always drains the entire
+    // backlog by construction — there is never a second chunk to try.
+    if (options.maxBatchSize === null) break;
+
+    // Between-chunks checkpoint: lets shutdown stop the loop once a chunk
+    // has fully completed, without starting a new chunk's work — distinct
+    // from the per-chunk checkpoint above, which protects a chunk already
+    // in flight.
+    if (shouldAbort()) {
+      aborted = true;
+      break;
+    }
   }
 
-  // Phase 5-6
-  const submitResult = await submitAndConfirmBatch(
-    deps,
-    { id: batchId, merkleRoot: collected.root, size: collected.size },
-    {
-      confirmations: options.confirmations,
-      confirmationTimeoutMs: options.confirmationTimeoutMs,
-    },
-    logger,
-  );
+  if (batches.length === 0 && !aborted) {
+    logger.info({ cycle: options.cycleNumber }, "nothing to anchor this cycle");
+  }
 
   // Phase 7
   const summary = buildCycleSummary({
     cycle: options.cycleNumber,
     reconciled,
-    scanned: collected.scannedCount,
-    rejected: collected.rejectedCount,
-    batched: collected.entries.length,
-    root: collected.root,
-    txHash: submitResult.status === "failed" ? null : submitResult.txHash,
-    blockNumber:
-      submitResult.status === "confirmed" ? submitResult.block.number : null,
-    gasUsed:
-      submitResult.status === "confirmed"
-        ? (submitResult.block.gasUsed ?? null)
-        : null,
-    gasPrice:
-      submitResult.status === "confirmed"
-        ? (submitResult.block.gasPrice ?? null)
-        : null,
-    status: submitResult.status,
+    scanned,
+    rejected,
+    batched,
+    batches,
+    status: rollUpStatus(aborted, batches),
     durationMs: performance.now() - cycleStart,
     stageMs: {
       reconcile: reconcileMs,
-      ...collected.stageMs,
+      scanAndValidate: scanAndValidateMs,
+      tree: treeMs,
       persist: persistMs,
-      ...submitResult.stageMs,
+      submit: submitMs,
+      confirm: confirmMs,
     },
     peakRssBytes: snapshotMemory().rssBytes,
   });
