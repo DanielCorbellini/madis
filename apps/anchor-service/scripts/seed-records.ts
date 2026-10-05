@@ -59,6 +59,8 @@ function parseCliArgs(argv: string[]): {
   count: number;
   type: RecordType;
   truncate: boolean;
+  updateEntityId: number | null;
+  deleteEntityId: number | null;
 } {
   const { values } = parseArgs({
     args: argv,
@@ -66,19 +68,59 @@ function parseCliArgs(argv: string[]): {
       count: { type: "string" },
       type: { type: "string" },
       truncate: { type: "boolean", default: false },
+      update: { type: "string" },
+      delete: { type: "string" },
     },
   });
+
+  if (values.type !== "prescription" && values.type !== "emr_encounter") {
+    throw new Error('--type must be "prescription" or "emr_encounter"');
+  }
+
+  if (values.update !== undefined && values.delete !== undefined) {
+    throw new Error("--update and --delete are mutually exclusive");
+  }
+
+  if (values.delete !== undefined) {
+    const deleteEntityId = Number(values.delete);
+    if (!Number.isInteger(deleteEntityId) || deleteEntityId <= 0) {
+      throw new Error("--delete must be a positive integer (an entity_id)");
+    }
+    return {
+      count: 1,
+      type: values.type,
+      truncate: false,
+      updateEntityId: null,
+      deleteEntityId,
+    };
+  }
+
+  if (values.update !== undefined) {
+    const updateEntityId = Number(values.update);
+    if (!Number.isInteger(updateEntityId) || updateEntityId <= 0) {
+      throw new Error("--update must be a positive integer (an entity_id)");
+    }
+    return {
+      count: 1,
+      type: values.type,
+      truncate: false,
+      updateEntityId,
+      deleteEntityId: null,
+    };
+  }
 
   const count = Number(values.count);
   if (!Number.isInteger(count) || count <= 0) {
     throw new Error("--count must be a positive integer");
   }
 
-  if (values.type !== "prescription" && values.type !== "emr_encounter") {
-    throw new Error('--type must be "prescription" or "emr_encounter"');
-  }
-
-  return { count, type: values.type, truncate: values.truncate === true };
+  return {
+    count,
+    type: values.type,
+    truncate: values.truncate === true,
+    updateEntityId: null,
+    deleteEntityId: null,
+  };
 }
 
 /** The only `admin_user` use in this service — explicitly test/fixture-only (§14). */
@@ -148,8 +190,114 @@ export async function seedRecords(
   }
 }
 
+/** The latest version of an entity, as both `appendVersion` and `appendDelete` need it. */
+async function fetchLatestVersion(
+  pool: Pool,
+  type: RecordType,
+  entityId: number,
+): Promise<{ id: number; version: number; payload: Record<string, unknown> }> {
+  const { rows } = await pool.query<{
+    id: string;
+    version: number;
+    payload: Record<string, unknown>;
+  }>(
+    "SELECT id, version, payload FROM records WHERE record_type = $1 AND entity_id = $2 ORDER BY version DESC LIMIT 1",
+    [type, entityId],
+  );
+
+  if (rows.length === 0) {
+    throw new Error(`no existing ${type} entity with entity_id ${entityId}`);
+  }
+
+  return { id: Number(rows[0].id), version: rows[0].version, payload: rows[0].payload };
+}
+
+/**
+ * Signs and inserts the next version row for an existing entity — the
+ * shared append-only mechanics behind both `appendVersion` (update) and
+ * `appendDelete` (logical delete). Unlike a create, an update/delete's
+ * signed content always carries the entity's real `entityId` (not `null`)
+ * — see `validation.ts`'s `isCreate` check.
+ */
+async function insertNextVersion(
+  pool: Pool,
+  wallet: HDNodeWallet,
+  type: RecordType,
+  entityId: number,
+  current: { id: number; version: number },
+  payload: Record<string, unknown>,
+  isDeleted: boolean,
+): Promise<{ id: number; version: number }> {
+  const newVersion = current.version + 1;
+
+  const signature = wallet.signMessageSync(
+    canonicalize({
+      recordType: type,
+      data: payload,
+      version: newVersion,
+      isDeleted,
+      replaces: current.id,
+      entityId,
+    }),
+  );
+
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO records (entity_id, record_type, payload, version, is_deleted, replaces, client_address, signature)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [
+      entityId,
+      type,
+      JSON.stringify(payload),
+      newVersion,
+      isDeleted,
+      current.id,
+      wallet.address,
+      signature,
+    ],
+  );
+
+  return { id: Number(rows[0].id), version: newVersion };
+}
+
+/**
+ * Appends a new version to an existing entity — e.g. to exercise the
+ * happy-path's "at least one versioned update" case, or to re-create it
+ * repeatedly across test runs without hand-written SQL. Generates a new
+ * synthetic payload (via `buildPayload`) rather than carrying the old one
+ * forward, so an update is visibly distinguishable from the row it replaces.
+ */
+export async function appendVersion(
+  pool: Pool,
+  wallet: HDNodeWallet,
+  type: RecordType,
+  entityId: number,
+): Promise<{ id: number; version: number }> {
+  const current = await fetchLatestVersion(pool, type, entityId);
+  const payload = buildPayload(type, current.version + 1);
+  return insertNextVersion(pool, wallet, type, entityId, current, payload, false);
+}
+
+/**
+ * Appends a logical-delete version to an existing entity (`is_deleted:
+ * true`) — exercises the append-only soft-delete path end to end: the
+ * payload carries the prior version's content forward unchanged, since a
+ * delete doesn't change business data, only marks the entity gone.
+ */
+export async function appendDelete(
+  pool: Pool,
+  wallet: HDNodeWallet,
+  type: RecordType,
+  entityId: number,
+): Promise<{ id: number; version: number }> {
+  const current = await fetchLatestVersion(pool, type, entityId);
+  return insertNextVersion(pool, wallet, type, entityId, current, current.payload, true);
+}
+
 async function main(): Promise<void> {
-  const { count, type, truncate } = parseCliArgs(process.argv.slice(2));
+  const { count, type, truncate, updateEntityId, deleteEntityId } = parseCliArgs(
+    process.argv.slice(2),
+  );
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
@@ -178,12 +326,27 @@ async function main(): Promise<void> {
 
   const pool = createDbPool(databaseUrl);
   try {
+    if (deleteEntityId !== null) {
+      const { id, version } = await appendDelete(pool, wallet, type, deleteEntityId);
+      console.log(
+        `Appended delete version ${version} (new record id ${id}) to ${type} entity_id ${deleteEntityId}.`,
+      );
+      return;
+    }
+
+    if (updateEntityId !== null) {
+      const { id, version } = await appendVersion(pool, wallet, type, updateEntityId);
+      console.log(
+        `Appended version ${version} (new record id ${id}) to ${type} entity_id ${updateEntityId}.`,
+      );
+      return;
+    }
+
     await seedRecords(pool, wallet, type, count);
+    console.log(`Inserted ${count} ${type} record(s).`);
   } finally {
     await pool.end();
   }
-
-  console.log(`Inserted ${count} ${type} record(s).`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
