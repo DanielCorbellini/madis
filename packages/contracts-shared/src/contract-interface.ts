@@ -23,7 +23,9 @@ export interface MerkleAnchorRegistryLike {
   filters: { RootAdded(index?: unknown, root?: string): unknown };
   queryFilter(
     filter: unknown,
-  ): Promise<Array<{ blockNumber: number; args: { batchId: bigint } }>>;
+  ): Promise<
+    Array<{ blockNumber: number; args: { batchId: bigint; root: string } }>
+  >;
   owner(): Promise<string>;
 }
 
