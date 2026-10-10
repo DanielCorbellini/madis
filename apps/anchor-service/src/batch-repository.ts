@@ -235,3 +235,19 @@ export async function* streamBatchRecords(
     yield toAnchorableRecord(row);
   }
 }
+
+/**
+ * Whether a `batches` row with this id exists. Diagnostics only — used to
+ * word alert messages ("its row is gone" vs "its pins are gone"), never to
+ * decide anything: Postgres is not the source of truth here.
+ */
+export async function batchExists(
+  db: Queryable,
+  batchId: number,
+): Promise<boolean> {
+  const { rows } = await db.query(
+    `SELECT 1 FROM batches WHERE id = $1 LIMIT 1`,
+    [batchId],
+  );
+  return rows.length > 0;
+}

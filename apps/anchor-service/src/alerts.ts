@@ -88,3 +88,51 @@ export async function recordHashFailure(
   );
   return true;
 }
+
+/**
+ * Records that a rebuilt Merkle root already exists on-chain under a batch
+ * id other than the caller's (the contract's own RootAlreadyExists rule).
+ * `batchId` is the caller's own batch row when one exists, or null when none
+ * was created (the skip path; `integrity_alerts.batch_id` has an FK to
+ * `batches`, and the owner's row may not exist). Deduped by root: a
+ * permanently stalled set is re-detected every cycle but alerted only once.
+ * Returns whether a new row was written.
+ */
+export async function recordDuplicateRoot(
+  db: Queryable,
+  batchId: number | null,
+  root: string,
+  details: string,
+): Promise<boolean> {
+  const existing = await db.query(
+    `
+      SELECT
+          1
+      FROM
+          integrity_alerts
+      WHERE
+          source = 'anchor'
+          AND alert_type = 'duplicate_root'
+          AND actual_root = $1
+      LIMIT
+          1
+    `,
+    [root],
+  );
+
+  if (existing.rows.length > 0) {
+    return false;
+  }
+
+  await db.query(
+    `
+      INSERT INTO
+          integrity_alerts (alert_type, source, batch_id, actual_root, details)
+      VALUES
+          ('duplicate_root', 'anchor', $1, $2, $3)
+    `,
+    [batchId, root, details],
+  );
+
+  return true;
+}
