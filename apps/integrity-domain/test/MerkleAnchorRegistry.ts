@@ -93,7 +93,7 @@ describe("MerkleAnchorRegistry", function () {
           MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, batchSize, 1),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
-          .withArgs(index, hashToBeAnchored, batchSize);
+          .withArgs(index, hashToBeAnchored, batchSize, 1);
 
         const containsRoot =
           await MerkleAnchorRegistry.containsMerkleRoot(hashToBeAnchored);
@@ -110,13 +110,27 @@ describe("MerkleAnchorRegistry", function () {
           MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, batchSize1, 1),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
-          .withArgs(0, hashToBeAnchored1, batchSize1);
+          .withArgs(0, hashToBeAnchored1, batchSize1, 1);
 
         await expect(
           MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, batchSize2, 2),
         )
           .to.emit(MerkleAnchorRegistry, "RootAdded")
-          .withArgs(1, hashToBeAnchored2, batchSize2);
+          .withArgs(1, hashToBeAnchored2, batchSize2, 2);
+      });
+
+      it("emits batchId on RootAdded independently of the positional index", async function () {
+        const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData-batchid"));
+
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored, 7, 999);
+
+        const events = await MerkleAnchorRegistry.queryFilter(
+          MerkleAnchorRegistry.filters.RootAdded(undefined, hashToBeAnchored),
+        );
+
+        expect(events.length).to.equal(1);
+        expect(events[0].args.batchId).to.equal(999n);
+        expect(events[0].args.batchSize).to.equal(7n);
       });
 
       it("should update the storage correctly after adding multiple roots", async function () {

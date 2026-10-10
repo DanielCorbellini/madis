@@ -29,7 +29,8 @@ contract MerkleAnchorRegistry is Ownable {
     event RootAdded(
         uint256 indexed index,
         bytes32 indexed root,
-        uint256 batchSize
+        uint256 batchSize,
+        uint256 batchId
     );
 
     /**
@@ -60,7 +61,7 @@ contract MerkleAnchorRegistry is Ownable {
         rootToIndexPlusOne[_root] = index + 1;
         batchInfo[_batchId] = BatchInfo({ root: _root, size: _batchSize });
 
-        emit RootAdded(index, _root, _batchSize);
+        emit RootAdded(index, _root, _batchSize, _batchId);
 
         return index;
     }
