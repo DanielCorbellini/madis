@@ -136,3 +136,11 @@ export async function recordDuplicateRoot(
 
   return true;
 }
+
+export function duplicateRootMessage(args: {
+  batchId: number;
+  root: string;
+  ownerBatchId: number;
+}): string {
+  return `batch ${args.batchId}: root ${args.root} already exists on-chain (contract RootAlreadyExists) under batch ${args.ownerBatchId}, not this batch's id — not confirming; its anchor_records pins cannot be moved (no UPDATE/DELETE grant)`;
+}

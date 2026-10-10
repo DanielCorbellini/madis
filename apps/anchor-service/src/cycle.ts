@@ -6,6 +6,7 @@ import {
   timed,
 } from "service-runtime";
 import {
+  duplicateRootMessage,
   recordDuplicateRoot as dbRecordDuplicateRoot,
   recordSignatureMismatch as dbRecordSignatureMismatch,
 } from "./alerts.ts";
@@ -195,26 +196,53 @@ export async function collectValidBatch(
 }
 
 /**
- * The batch's root is already on-chain, but registered under a different
- * batch id, so this batch can never get its own `BatchInfo`. Don't confirm
- * it: mark it failed with an explicit message and alert once. Its
- * anchor_records pins were persisted before this was known and can't be
- * moved (no UPDATE/DELETE grant).
+ * The batch's root is already on-chain. Only a root owned by THIS batch id
+ * means "my batch is confirmed" (the same-batch race this check exists for).
+ * A root owned by a different batch id can never give this batch its own
+ * `BatchInfo`: don't confirm it — mark it failed with an explicit message and
+ * alert once. Its anchor_records pins were persisted before this was known
+ * and can't be moved (no UPDATE/DELETE grant).
  */
-async function failAsDuplicate(
+async function settleOwnedRoot(
   deps: Pick<SubmitDeps, "batches" | "alerts">,
   batch: { id: number; merkleRoot: string },
-  ownerBatchId: number,
+  owner: OnChainRootOwner,
   logger: Logger,
-  stageMs: { submit: number; confirm: number },
+  submitStart: number,
 ): Promise<SubmitAndConfirmResult> {
-  const message = `batch ${batch.id}: rebuilt root ${batch.merkleRoot} already exists on-chain (contract RootAlreadyExists) under batch ${ownerBatchId}, not this batch's id — not confirming; its anchor_records pins cannot be moved (no UPDATE/DELETE grant)`;
+  if (owner.ownerBatchId === batch.id) {
+    await deps.batches.markConfirmed(batch.id, owner.block);
 
-  logger.error({ batchId: batch.id, ownerBatchId }, message);
+    return {
+      status: "confirmed",
+      block: owner.block,
+      txHash: null,
+      stageMs: { submit: performance.now() - submitStart, confirm: 0 },
+    };
+  }
+
+  const message = duplicateRootMessage({
+    batchId: batch.id,
+    root: batch.merkleRoot,
+    ownerBatchId: owner.ownerBatchId,
+  });
+
   await deps.batches.markFailed(batch.id, message);
-  await deps.alerts.recordDuplicateRoot(batch.id, batch.merkleRoot, message);
+  const isNew = await deps.alerts.recordDuplicateRoot(
+    batch.id,
+    batch.merkleRoot,
+    message,
+  );
+  logger[isNew ? "error" : "warn"](
+    { batchId: batch.id, ownerBatchId: owner.ownerBatchId },
+    message,
+  );
 
-  return { status: "failed", errorMessage: message, stageMs };
+  return {
+    status: "failed",
+    errorMessage: message,
+    stageMs: { submit: performance.now() - submitStart, confirm: 0 },
+  };
 }
 
 /**
@@ -239,21 +267,7 @@ export async function submitAndConfirmBatch(
    * against races between Phase 0 and a live cycle for the same batch.
    */
   if (existingOwner) {
-    if (existingOwner.ownerBatchId === batch.id) {
-      await deps.batches.markConfirmed(batch.id, existingOwner.block);
-
-      return {
-        status: "confirmed",
-        block: existingOwner.block,
-        txHash: null,
-        stageMs: { submit: performance.now() - submitStart, confirm: 0 },
-      };
-    }
-
-    return failAsDuplicate(deps, batch, existingOwner.ownerBatchId, logger, {
-      submit: performance.now() - submitStart,
-      confirm: 0,
-    });
+    return settleOwnedRoot(deps, batch, existingOwner, logger, submitStart);
   }
 
   let result: SubmitResult;
@@ -288,14 +302,14 @@ export async function submitAndConfirmBatch(
    * Safeguard against racing conditions after the submission of a root
    */
   if (result.status === "already-on-chain") {
-    const existingOwner = await deps.chain.findRootOnChain(batch.merkleRoot);
+    const racedOwner = await deps.chain.findRootOnChain(batch.merkleRoot);
 
     /**
      * This should never happen, but if it does,
      * log an error and mark the batch as failed.
      * This is a safeguard against inconsistencies in the RPC provider.
      */
-    if (!existingOwner) {
+    if (!racedOwner) {
       const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
       logger.error({ batchId: batch.id }, message);
       await deps.batches.markFailed(batch.id, message);
@@ -306,20 +320,7 @@ export async function submitAndConfirmBatch(
       };
     }
 
-    if (existingOwner.ownerBatchId === batch.id) {
-      await deps.batches.markConfirmed(batch.id, existingOwner.block);
-      return {
-        status: "confirmed",
-        block: existingOwner.block,
-        txHash: null,
-        stageMs: { submit: performance.now() - submitStart, confirm: 0 },
-      };
-    }
-
-    return failAsDuplicate(deps, batch, existingOwner.ownerBatchId, logger, {
-      submit: performance.now() - submitStart,
-      confirm: 0,
-    });
+    return settleOwnedRoot(deps, batch, racedOwner, logger, submitStart);
   }
 
   const submitMs = performance.now() - submitStart;
@@ -437,11 +438,16 @@ export async function runCycle(
       : `batch ${existingOwner.ownerBatchId} no longer exists in Postgres, so its batches row and pins were likely deleted`;
     const message = `rebuilt root ${collected.root} already exists on-chain (contract RootAlreadyExists) under batch ${existingOwner.ownerBatchId}; ${ownerState}. Skipping ${collected.entries.length} unpinned record(s): nothing inserted. This clears when a new record changes the set.`;
 
-    logger.error(
+    const isNew = await deps.alerts.recordDuplicateRoot(
+      null,
+      collected.root,
+      message,
+    );
+    // A stalled set is re-detected every cycle: shout once, then stay visible but quiet.
+    logger[isNew ? "error" : "warn"](
       { ownerBatchId: existingOwner.ownerBatchId, root: collected.root },
       message,
     );
-    await deps.alerts.recordDuplicateRoot(null, collected.root, message);
 
     return buildCycleSummary({
       cycle: options.cycleNumber,
