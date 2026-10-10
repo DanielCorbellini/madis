@@ -21,7 +21,9 @@ export interface MerkleAnchorRegistryLike {
   getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
   getRootCount(): Promise<number>;
   filters: { RootAdded(index?: unknown, root?: string): unknown };
-  queryFilter(filter: unknown): Promise<Array<{ blockNumber: number }>>;
+  queryFilter(
+    filter: unknown,
+  ): Promise<Array<{ blockNumber: number; args: { batchId: bigint } }>>;
   owner(): Promise<string>;
 }
 
