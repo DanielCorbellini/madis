@@ -377,6 +377,7 @@ export async function submitAndConfirmBatch(
  * Sequences one full anchoring cycle:
  * 1. Phase 0 (reconcile in-flight batches),
  * 2. Phases 1–3 (collect a new valid batch, or "nothing to anchor"),
+ * 2b. Phase 3.5 (skip a collection whose root already exists on-chain),
  * 3. Phase 4 (persist),
  * 4. Phases 5–6 (submit + await confirmation)
  * 5. Phase 7 (summary).
@@ -416,6 +417,50 @@ export async function runCycle(
       status: "nothing-to-anchor",
       durationMs: performance.now() - cycleStart,
       stageMs: { reconcile: reconcileMs, collect: collectMs },
+      peakRssBytes: snapshotMemory().rssBytes,
+    });
+  }
+
+  // Phase 3.5: if this exact root is already on-chain (under some batch),
+  // the contract would reject it. Persist nothing and end this collection —
+  // a phantom 'confirmed' row here is the bug this guard exists to prevent.
+  const { result: existingOwner, ms: duplicateCheckMs } = await timed(() =>
+    deps.chain.findRootOnChain(collected.root),
+  );
+
+  if (existingOwner) {
+    const ownerRowExists = await deps.batches.batchExists(
+      existingOwner.ownerBatchId,
+    );
+    const ownerState = ownerRowExists
+      ? `batch ${existingOwner.ownerBatchId} still exists in Postgres, so its anchor_records pins were likely deleted`
+      : `batch ${existingOwner.ownerBatchId} no longer exists in Postgres, so its batches row and pins were likely deleted`;
+    const message = `rebuilt root ${collected.root} already exists on-chain (contract RootAlreadyExists) under batch ${existingOwner.ownerBatchId}; ${ownerState}. Skipping ${collected.entries.length} unpinned record(s): nothing inserted. This clears when a new record changes the set.`;
+
+    logger.error(
+      { ownerBatchId: existingOwner.ownerBatchId, root: collected.root },
+      message,
+    );
+    await deps.alerts.recordDuplicateRoot(null, collected.root, message);
+
+    return buildCycleSummary({
+      cycle: options.cycleNumber,
+      reconciled,
+      scanned: collected.scannedCount,
+      rejected: collected.rejectedCount,
+      batched: 0,
+      root: collected.root,
+      txHash: null,
+      blockNumber: null,
+      gasUsed: null,
+      gasPrice: null,
+      status: "duplicate-skipped",
+      durationMs: performance.now() - cycleStart,
+      stageMs: {
+        reconcile: reconcileMs,
+        ...collected.stageMs,
+        duplicateCheck: duplicateCheckMs,
+      },
       peakRssBytes: snapshotMemory().rssBytes,
     });
   }
