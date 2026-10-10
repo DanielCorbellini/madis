@@ -23,9 +23,17 @@ export type ReceiptOutcome =
   | { kind: "pending-confirmations"; confirmationsSoFar: number }
   | { kind: "confirmed"; block: BlockRef };
 
+export interface OnChainRootOwner {
+  ownerBatchId: number;
+  block: BlockRef;
+}
+
 /**
- * Finds the block number and timestamp of a root on-chain by checking if the root
- * exists and querying the RootAdded event.
+ * Finds who owns a root on-chain: the batchId it was registered under (read
+ * off the RootAdded event) plus its block ref. Callers must compare
+ * `ownerBatchId` with their own batch id before treating "exists on-chain" as
+ * "my batch is done" — a root can only ever be registered once, under one
+ * batch id.
  */
 export async function findRootOnChain(
   contract: Pick<
@@ -34,7 +42,7 @@ export async function findRootOnChain(
   >,
   provider: Pick<ChainProvider, "getBlock">,
   root: string,
-): Promise<BlockRef | null> {
+): Promise<OnChainRootOwner | null> {
   const exists = await contract.containsMerkleRoot(root);
   if (!exists) return null;
 
@@ -48,18 +56,22 @@ export async function findRootOnChain(
     );
   }
 
-  const block = await provider.getBlock(logs[0].blockNumber);
+  const log = logs[0];
+  const block = await provider.getBlock(log.blockNumber);
   if (!block) {
     throw new Error(
-      `block ${logs[0].blockNumber} for RootAdded(${root}) not found`,
+      `block ${log.blockNumber} for RootAdded(${root}) not found`,
     );
   }
 
   return {
-    number: logs[0].blockNumber,
-    timestamp: block.timestamp,
-    gasUsed: null,
-    gasPrice: null,
+    ownerBatchId: Number(log.args.batchId),
+    block: {
+      number: log.blockNumber,
+      timestamp: block.timestamp,
+      gasUsed: null,
+      gasPrice: null,
+    },
   };
 }
 
