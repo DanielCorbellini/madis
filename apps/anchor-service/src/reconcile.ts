@@ -2,7 +2,10 @@ import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
 import type { AnchorableRecord, Logger } from "service-runtime";
-import { recordHashFailure as dbRecordHashFailure } from "./alerts.ts";
+import {
+  recordDuplicateRoot as dbRecordDuplicateRoot,
+  recordHashFailure as dbRecordHashFailure,
+} from "./alerts.ts";
 import {
   type Batch,
   type BatchStatus,
@@ -16,6 +19,7 @@ import {
   type BlockRef,
   findRootOnChain as chainFindRootOnChain,
   inspectTransaction as chainInspectTransaction,
+  type OnChainRootOwner,
   type ReceiptOutcome,
 } from "./chain-confirm.ts";
 import {
@@ -32,7 +36,7 @@ export interface ReconcileDeps {
   markSubmitted(batchId: number, txHash: string): Promise<void>;
   markConfirmed(batchId: number, block: BlockRef): Promise<void>;
   markFailed(batchId: number, errorMessage: string): Promise<void>;
-  findRootOnChain(root: string): Promise<BlockRef | null>;
+  findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
   submitRoot(
     root: string,
     size: number,
@@ -53,6 +57,11 @@ export interface ReconcileDeps {
     batchId: number,
     details: string,
   ): Promise<boolean>;
+  recordDuplicateRoot(
+    batchId: number | null,
+    root: string,
+    details: string,
+  ): Promise<boolean>;
 }
 
 export interface ReconcileSummary {
@@ -64,6 +73,32 @@ export interface ReconcileSummary {
 export interface ReconcileOptions {
   confirmations: number;
   retryAlertThreshold: number;
+}
+
+/**
+ * The batch's root is already on-chain, but registered under a different
+ * batch id, so this batch can never get its own `BatchInfo`. Don't confirm
+ * it: mark it failed with an explicit message and alert once. Its
+ * anchor_records pins already exist and can't be moved (no UPDATE/DELETE
+ * grant).
+ */
+async function failAsDuplicate(
+  deps: Pick<ReconcileDeps, "markFailed" | "recordDuplicateRoot">,
+  batch: Batch,
+  ownerBatchId: number,
+  logger: Logger,
+  summary: ReconcileSummary,
+): Promise<void> {
+  const message = `batch ${batch.id}: root ${batch.merkleRoot} already exists on-chain (contract RootAlreadyExists) under batch ${ownerBatchId}, not this batch's id — not confirming; its anchor_records pins cannot be moved (no UPDATE/DELETE grant)`;
+
+  logger.error({ batchId: batch.id, ownerBatchId }, message);
+
+  // An already-failed batch is re-detected every Phase 0; don't bump retry_count each time.
+  if (batch.status !== "failed") {
+    await deps.markFailed(batch.id, message);
+  }
+  await deps.recordDuplicateRoot(batch.id, batch.merkleRoot, message);
+  summary.failed++;
 }
 
 /**
@@ -102,11 +137,21 @@ export async function reconcileBatches(
   const batches = await deps.findInFlightBatches();
 
   for (const batch of batches) {
-    const alreadyOnChain = await deps.findRootOnChain(batch.merkleRoot);
+    const existingOwner = await deps.findRootOnChain(batch.merkleRoot);
 
-    if (alreadyOnChain) {
-      await deps.markConfirmed(batch.id, alreadyOnChain);
-      summary.confirmed++;
+    if (existingOwner) {
+      if (existingOwner.ownerBatchId === batch.id) {
+        await deps.markConfirmed(batch.id, existingOwner.block);
+        summary.confirmed++;
+      } else {
+        await failAsDuplicate(
+          deps,
+          batch,
+          existingOwner.ownerBatchId,
+          logger,
+          summary,
+        );
+      }
       continue;
     }
 
@@ -147,9 +192,9 @@ async function reconcilePending(
   }
 
   if (result.status === "already-on-chain") {
-    const block = await deps.findRootOnChain(batch.merkleRoot);
+    const existingOwner = await deps.findRootOnChain(batch.merkleRoot);
 
-    if (!block) {
+    if (!existingOwner) {
       const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
       logger.error({ batchId: batch.id }, message);
 
@@ -158,8 +203,19 @@ async function reconcilePending(
       return;
     }
 
-    await deps.markConfirmed(batch.id, block);
-    summary.confirmed++;
+    if (existingOwner.ownerBatchId === batch.id) {
+      await deps.markConfirmed(batch.id, existingOwner.block);
+      summary.confirmed++;
+      return;
+    }
+
+    await failAsDuplicate(
+      deps,
+      batch,
+      existingOwner.ownerBatchId,
+      logger,
+      summary,
+    );
     return;
   }
 
@@ -338,17 +394,28 @@ async function reconcileFailed(
     );
 
     if (result.status === "already-on-chain") {
-      const block = await deps.findRootOnChain(batch.merkleRoot);
+      const existingOwner = await deps.findRootOnChain(batch.merkleRoot);
 
-      if (!block) {
+      if (!existingOwner) {
         const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
         await deps.markFailed(batch.id, message);
         summary.failed++;
         return;
       }
 
-      await deps.markConfirmed(batch.id, block);
-      summary.confirmed++;
+      if (existingOwner.ownerBatchId === batch.id) {
+        await deps.markConfirmed(batch.id, existingOwner.block);
+        summary.confirmed++;
+        return;
+      }
+
+      await failAsDuplicate(
+        deps,
+        batch,
+        existingOwner.ownerBatchId,
+        logger,
+        summary,
+      );
       return;
     }
 
@@ -410,5 +477,7 @@ export function createReconcileDeps(
       ),
     recordHashFailure: (recordId, batchId, details) =>
       dbRecordHashFailure(pool, recordId, batchId, details),
+    recordDuplicateRoot: (batchId, root, details) =>
+      dbRecordDuplicateRoot(pool, batchId, root, details),
   };
 }
