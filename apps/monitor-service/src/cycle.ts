@@ -4,7 +4,10 @@ import {
 } from "contracts-shared";
 import type { Pool } from "pg";
 import { timed, trackPeakMemory, type Logger } from "service-runtime";
-import { recordRootDivergence as dbRecordRootDivergence } from "./alerts.ts";
+import {
+  recordMissingBatch as dbRecordMissingBatch,
+  recordRootDivergence as dbRecordRootDivergence,
+} from "./alerts.ts";
 import {
   auditBatch as runAuditBatch,
   type AuditDeps,
@@ -14,8 +17,13 @@ import {
   countTrackedBatches as dbCountTrackedBatches,
   findConfirmedBatchIds as dbFindConfirmedBatchIds,
   findSubmittedBatchIds as dbFindSubmittedBatchIds,
+  findTrackedBatchIds as dbFindTrackedBatchIds,
 } from "./batch-selection-repository.ts";
-import { checkRootCount } from "./root-count-check.ts";
+import {
+  checkRootCount,
+  findMissingBatches,
+  type AnchoredBatch,
+} from "./root-count-check.ts";
 import { createStaleSubmittedTracker } from "./stale-submitted-tracker.ts";
 
 export interface CycleDeps {
@@ -24,10 +32,12 @@ export interface CycleDeps {
     findConfirmedBatchIds(): Promise<number[]>;
     findSubmittedBatchIds(): Promise<number[]>;
     countTrackedBatches(): Promise<number>;
+    findTrackedBatchIds(): Promise<number[]>;
   };
   chain: {
     getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
     getRootCount(): Promise<number>;
+    listAnchoredBatches(): Promise<AnchoredBatch[]>;
     decodeRevertName(error: unknown): string | null;
   };
   tracking: {
@@ -40,6 +50,7 @@ export interface CycleDeps {
       expectedRoot: string | null,
       details: string,
     ): Promise<boolean>;
+    recordMissingBatch(root: string, details: string): Promise<boolean>;
   };
 }
 
@@ -55,6 +66,33 @@ export interface MonitorCycleSummary {
   durationMs: number;
   stageMs: Record<string, number>;
   peakRssBytes: number;
+}
+
+/**
+ * On a root-count mismatch only: diff the chain's own `(batchId, root)` list
+ * against the ids Postgres still tracks. A failure here must never break the
+ * cycle, so it degrades to "nothing named" and the caller falls back to the
+ * generic count alert.
+ */
+async function nameMissingBatches(
+  deps: Pick<CycleDeps, "chain" | "batches">,
+  logger: Logger,
+): Promise<AnchoredBatch[]> {
+  try {
+    const [onChain, trackedIds] = await Promise.all([
+      deps.chain.listAnchoredBatches(),
+      deps.batches.findTrackedBatchIds(),
+    ]);
+
+    return findMissingBatches(onChain, trackedIds);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      { err: message },
+      "could not name the batches behind the root-count mismatch; falling back to the generic alert",
+    );
+    return [];
+  }
 }
 
 /**
@@ -103,8 +141,23 @@ export async function runMonitorCycle(
       message,
     );
 
-    await deps.alerts.recordRootDivergence(null, null, message);
-    alertsFired++;
+    // The chain knows every batch id it accepted: name the ones Postgres no
+    // longer tracks. Only when none can be named (the opposite anomaly, or the
+    // listing failed) does the generic count alert fire instead.
+    const missing = await nameMissingBatches(deps, logger);
+
+    if (missing.length > 0) {
+      for (const batch of missing) {
+        const detail = `batch ${batch.batchId} (root ${batch.root}) was accepted on-chain but is no longer tracked as confirmed/submitted in Postgres — its batches row was likely deleted or its status tampered`;
+
+        logger.error({ batchId: batch.batchId, root: batch.root }, detail);
+        await deps.alerts.recordMissingBatch(batch.root, detail);
+        alertsFired++;
+      }
+    } else {
+      await deps.alerts.recordRootDivergence(null, null, message);
+      alertsFired++;
+    }
   }
 
   const { result: batchIds, ms: findMs } = await timed(() =>
@@ -238,7 +291,10 @@ export function createCycleDeps(
   contract: Pick<MerkleAnchorRegistryLike, "getRootCount">,
   pool: Pool,
   logger: Logger,
-  options: { submittedStaleMs: number },
+  options: {
+    submittedStaleMs: number;
+    listAnchoredBatches: () => Promise<AnchoredBatch[]>;
+  },
 ): CycleDeps {
   const tracker = createStaleSubmittedTracker(options.submittedStaleMs);
 
@@ -248,10 +304,12 @@ export function createCycleDeps(
       findConfirmedBatchIds: () => dbFindConfirmedBatchIds(pool),
       findSubmittedBatchIds: () => dbFindSubmittedBatchIds(pool),
       countTrackedBatches: () => dbCountTrackedBatches(pool),
+      findTrackedBatchIds: () => dbFindTrackedBatchIds(pool),
     },
     chain: {
       getBatchInfo: (batchId) => auditDeps.chain.getBatchInfo(batchId),
       getRootCount: () => contract.getRootCount(),
+      listAnchoredBatches: options.listAnchoredBatches,
       decodeRevertName,
     },
     tracking: {
@@ -262,6 +320,8 @@ export function createCycleDeps(
     alerts: {
       recordRootDivergence: (batchId, expectedRoot, details) =>
         dbRecordRootDivergence(pool, batchId, expectedRoot, details),
+      recordMissingBatch: (root, details) =>
+        dbRecordMissingBatch(pool, root, details),
     },
   };
 }

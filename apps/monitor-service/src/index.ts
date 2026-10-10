@@ -10,7 +10,11 @@ import {
   type Logger,
 } from "service-runtime";
 import { createAuditDeps } from "./audit.ts";
-import { createReadOnlyChainClient, createRetryingContract } from "./chain.ts";
+import {
+  createReadOnlyChainClient,
+  createRetryingContract,
+  listAnchoredBatches,
+} from "./chain.ts";
 import { loadConfig, type MonitorConfig } from "./config.ts";
 import { createCycleDeps, runMonitorCycle, type CycleDeps } from "./cycle.ts";
 
@@ -46,6 +50,8 @@ export async function main() {
   const auditDeps = createAuditDeps(retryingContract, pool);
   const deps = createCycleDeps(auditDeps, retryingContract, pool, logger, {
     submittedStaleMs: config.submittedStaleMs,
+    listAnchoredBatches: () =>
+      listAnchoredBatches(chain.contract, { retries: config.rpcRetries }),
   });
 
   let shutdownRequested = false;
