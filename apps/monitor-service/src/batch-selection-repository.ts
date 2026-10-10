@@ -37,3 +37,15 @@ export async function countTrackedBatches(db: Queryable): Promise<number> {
   );
   return Number((rows as Array<{ count: string }>)[0].count);
 }
+
+/**
+ * The ids Postgres currently tracks as on-chain-or-on-the-way — the same
+ * statuses `countTrackedBatches` counts. Diffed against the chain's own list
+ * of batch ids to name a deleted batch when the two counts disagree.
+ */
+export async function findTrackedBatchIds(db: Queryable): Promise<number[]> {
+  const { rows } = await db.query(
+    `SELECT id FROM batches WHERE status IN ('confirmed', 'submitted') ORDER BY id ASC`,
+  );
+  return (rows as Array<{ id: string }>).map((row) => Number(row.id));
+}

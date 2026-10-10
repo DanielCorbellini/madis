@@ -7,6 +7,7 @@ import {
 import { JsonRpcProvider } from "ethers";
 import pRetry, { AbortError } from "p-retry";
 import type { MonitorConfig } from "./config.ts";
+import type { AnchoredBatch } from "./root-count-check.ts";
 
 type ChainClientConfig = Pick<MonitorConfig, "rpcUrl" | "contractAddress">;
 
@@ -35,38 +36,65 @@ export function createReadOnlyChainClient(
 }
 
 /**
- * Wraps `getBatchInfo`/`getRootCount` with retry-on-transient-failure. A
- * genuine contract revert (e.g. `RootDoesNotExist`) is deterministic —
- * retrying it changes nothing — so it's decoded and aborted immediately
- * instead of retried; only network/RPC-shaped failures (timeout,
- * connection reset, rate limit) get retried. `getRootCount` has no
- * revert case of its own in practice, but sharing this helper keeps the
- * retry policy in one place.
+ * Retries a chain call on transient failures. A genuine contract revert (e.g.
+ * `RootDoesNotExist`) is deterministic — retrying it changes nothing — so it's
+ * decoded and aborted immediately instead of retried; only network/RPC-shaped
+ * failures (timeout, connection reset, rate limit) get retried.
+ */
+function retryTransient<T>(
+  fn: () => Promise<T>,
+  retries: number,
+): Promise<T> {
+  return pRetry(
+    async () => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (decodeRevertName(error) !== null) {
+          throw new AbortError(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+        throw error;
+      }
+    },
+    { retries },
+  );
+}
+
+/**
+ * Wraps `getBatchInfo`/`getRootCount` with retry-on-transient-failure.
+ * `getRootCount` has no revert case of its own in practice, but sharing the
+ * helper keeps the retry policy in one place.
  */
 export function createRetryingContract(
   contract: Pick<MerkleAnchorRegistryLike, "getBatchInfo" | "getRootCount">,
   options: { retries: number },
 ): Pick<MerkleAnchorRegistryLike, "getBatchInfo" | "getRootCount"> {
-  function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-    return pRetry(
-      async () => {
-        try {
-          return await fn();
-        } catch (error) {
-          if (decodeRevertName(error) !== null) {
-            throw new AbortError(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-          }
-          throw error;
-        }
-      },
-      { retries: options.retries },
-    );
-  }
-
   return {
-    getBatchInfo: (batchId) => withRetry(() => contract.getBatchInfo(batchId)),
-    getRootCount: () => withRetry(() => contract.getRootCount()),
+    getBatchInfo: (batchId) =>
+      retryTransient(() => contract.getBatchInfo(batchId), options.retries),
+    getRootCount: () =>
+      retryTransient(() => contract.getRootCount(), options.retries),
   };
+}
+
+/**
+ * Every `(batchId, root)` the contract has ever accepted, read from the
+ * `RootAdded` event log — chain-sourced, so a deleted Postgres row can't hide
+ * from it. Used only to name the batches behind a root-count mismatch.
+ */
+export async function listAnchoredBatches(
+  contract: Pick<MerkleAnchorRegistryLike, "filters" | "queryFilter">,
+  options: { retries: number },
+): Promise<AnchoredBatch[]> {
+  const logs = await retryTransient(
+    () => contract.queryFilter(contract.filters.RootAdded()),
+    options.retries,
+  );
+
+  return logs.map((log) => ({
+    batchId: Number(log.args.batchId),
+    root: log.args.root,
+  }));
 }
