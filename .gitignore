@@ -44,3 +44,6 @@ apps/anchor-service/bench/results/
 
 *.test.ts
 test-db.ts
+apps/anchor-service/test/wip-max-batch-size/cycle-deps.test.ts.bak
+apps/anchor-service/test/wip-max-batch-size/cycle.test.ts.bak
+apps/anchor-service/test/wip-max-batch-size/metrics.test.ts.bak
