@@ -4,6 +4,11 @@ export interface RootCountCheck {
   matches: boolean;
 }
 
+export interface AnchoredBatch {
+  batchId: number;
+  root: string;
+}
+
 /**
  * Compares the total number of roots the contract has ever accepted
  * against how many `batches` rows Postgres currently counts as
@@ -24,4 +29,20 @@ export function checkRootCount(
     trackedBatchCount,
     matches: onChainRootCount === trackedBatchCount,
   };
+}
+
+/**
+ * Names the batches behind a root-count mismatch: the on-chain
+ * `(batchId, root)` pairs whose id is not among the ids Postgres currently
+ * tracks as confirmed/submitted. The chain supplies the ids and roots, so a
+ * deleted `batches` row can't hide itself; Postgres only supplies which ids it
+ * still has. Tracked ids that aren't on-chain are not "missing" — they are the
+ * opposite anomaly (an over-count) and stay with the generic count alert.
+ */
+export function findMissingBatches(
+  onChain: AnchoredBatch[],
+  trackedBatchIds: number[],
+): AnchoredBatch[] {
+  const tracked = new Set(trackedBatchIds);
+  return onChain.filter((batch) => !tracked.has(batch.batchId));
 }
