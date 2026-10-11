@@ -3,9 +3,9 @@ import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
 import type { AnchorableRecord, Logger } from "service-runtime";
 import {
-  duplicateRootMessage,
   recordDuplicateRoot as dbRecordDuplicateRoot,
   recordHashFailure as dbRecordHashFailure,
+  duplicateRootMessage,
 } from "./alerts.ts";
 import {
   type Batch,
@@ -18,6 +18,7 @@ import {
 } from "./batch-repository.ts";
 import {
   type BlockRef,
+  findRootBlock as chainFindRootBlock,
   findRootOnChain as chainFindRootOnChain,
   inspectTransaction as chainInspectTransaction,
   type OnChainRootOwner,
@@ -38,6 +39,7 @@ export interface ReconcileDeps {
   markConfirmed(batchId: number, block: BlockRef): Promise<void>;
   markFailed(batchId: number, errorMessage: string): Promise<void>;
   findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
+  findRootBlock(root: string): Promise<BlockRef>;
   submitRoot(
     root: string,
     size: number,
@@ -86,7 +88,7 @@ export interface ReconcileOptions {
 async function settleOwnedRoot(
   deps: Pick<
     ReconcileDeps,
-    "markConfirmed" | "markFailed" | "recordDuplicateRoot"
+    "findRootBlock" | "markConfirmed" | "markFailed" | "recordDuplicateRoot"
   >,
   batch: Batch,
   owner: OnChainRootOwner,
@@ -94,7 +96,11 @@ async function settleOwnedRoot(
   summary: ReconcileSummary,
 ): Promise<void> {
   if (owner.ownerBatchId === batch.id) {
-    await deps.markConfirmed(batch.id, owner.block);
+    // The block is only needed to record this batch's own confirmation.
+    await deps.markConfirmed(
+      batch.id,
+      await deps.findRootBlock(batch.merkleRoot),
+    );
     summary.confirmed++;
     return;
   }
@@ -130,7 +136,11 @@ async function settleOwnedRoot(
 async function settleAlreadyOnChain(
   deps: Pick<
     ReconcileDeps,
-    "findRootOnChain" | "markConfirmed" | "markFailed" | "recordDuplicateRoot"
+    | "findRootBlock"
+    | "findRootOnChain"
+    | "markConfirmed"
+    | "markFailed"
+    | "recordDuplicateRoot"
   >,
   batch: Batch,
   logger: Logger,
@@ -450,8 +460,8 @@ export function createReconcileDeps(
     markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
     markFailed: (batchId, errorMessage) =>
       dbMarkFailed(pool, batchId, errorMessage),
-    findRootOnChain: (root) =>
-      chainFindRootOnChain(chain.contract, provider, root),
+    findRootOnChain: (root) => chainFindRootOnChain(chain.contract, root),
+    findRootBlock: (root) => chainFindRootBlock(chain.contract, provider, root),
     submitRoot: (root, size, batchId) =>
       chainSubmitRoot(chain.contract, provider, root, size, batchId, {
         retries: options.retries,

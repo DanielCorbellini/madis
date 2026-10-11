@@ -25,34 +25,45 @@ export type ReceiptOutcome =
 
 export interface OnChainRootOwner {
   ownerBatchId: number;
-  block: BlockRef;
 }
 
 /**
- * Finds who owns a root on-chain: the batchId it was registered under (read
- * off the RootAdded event) plus its block ref. Callers must compare
- * `ownerBatchId` with their own batch id before treating "exists on-chain" as
- * "my batch is done" — a root can only ever be registered once, under one
- * batch id.
+ * Finds who owns a root on-chain: the batchId it was registered under, read
+ * from the contract's stored state (never from event logs, which public RPC
+ * providers range-limit). Callers must compare `ownerBatchId` with their own
+ * batch id before treating "exists on-chain" as "my batch is done" — a root can
+ * only ever be registered once, under one batch id.
  */
 export async function findRootOnChain(
   contract: Pick<
     MerkleAnchorRegistryLike,
-    "containsMerkleRoot" | "filters" | "queryFilter"
+    "containsMerkleRoot" | "getBatchIdByRoot"
   >,
-  provider: Pick<ChainProvider, "getBlock">,
   root: string,
 ): Promise<OnChainRootOwner | null> {
   const exists = await contract.containsMerkleRoot(root);
   if (!exists) return null;
 
+  return { ownerBatchId: await contract.getBatchIdByRoot(root) };
+}
+
+/**
+ * Finds the block a root landed in, from its `RootAdded` event. Only needed to
+ * record `block_number`/`block_timestamp` when confirming this service's own
+ * batch — the ownership answer itself never depends on logs.
+ */
+export async function findRootBlock(
+  contract: Pick<MerkleAnchorRegistryLike, "filters" | "queryFilter">,
+  provider: Pick<ChainProvider, "getBlock">,
+  root: string,
+): Promise<BlockRef> {
   const logs = await contract.queryFilter(
     contract.filters.RootAdded(undefined, root),
   );
 
   if (logs.length === 0) {
     throw new Error(
-      `containsMerkleRoot(${root}) is true but no RootAdded event was found — invariant violation`,
+      `no RootAdded event was found for ${root}, though the root is on-chain — invariant violation`,
     );
   }
 
@@ -65,13 +76,10 @@ export async function findRootOnChain(
   }
 
   return {
-    ownerBatchId: Number(log.args.batchId),
-    block: {
-      number: log.blockNumber,
-      timestamp: block.timestamp,
-      gasUsed: null,
-      gasPrice: null,
-    },
+    number: log.blockNumber,
+    timestamp: block.timestamp,
+    gasUsed: null,
+    gasPrice: null,
   };
 }
 

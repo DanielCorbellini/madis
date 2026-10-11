@@ -22,6 +22,7 @@ import {
   type BlockRef,
   type OnChainRootOwner,
   awaitConfirmation as chainAwaitConfirmation,
+  findRootBlock as chainFindRootBlock,
   findRootOnChain as chainFindRootOnChain,
   RevertedTransactionError,
 } from "./chain-confirm.ts";
@@ -48,6 +49,7 @@ export interface CycleDeps {
   };
   chain: {
     findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
+    findRootBlock(root: string): Promise<BlockRef>;
     submitRoot(
       root: string,
       size: number,
@@ -204,18 +206,22 @@ export async function collectValidBatch(
  * and can't be moved (no UPDATE/DELETE grant).
  */
 async function settleOwnedRoot(
-  deps: Pick<SubmitDeps, "batches" | "alerts">,
+  deps: Pick<SubmitDeps, "batches" | "alerts"> & {
+    chain: Pick<CycleDeps["chain"], "findRootBlock">;
+  },
   batch: { id: number; merkleRoot: string },
   owner: OnChainRootOwner,
   logger: Logger,
   submitStart: number,
 ): Promise<SubmitAndConfirmResult> {
   if (owner.ownerBatchId === batch.id) {
-    await deps.batches.markConfirmed(batch.id, owner.block);
+    // The block is only needed to record this batch's own confirmation.
+    const block = await deps.chain.findRootBlock(batch.merkleRoot);
+    await deps.batches.markConfirmed(batch.id, block);
 
     return {
       status: "confirmed",
-      block: owner.block,
+      block,
       txHash: null,
       stageMs: { submit: performance.now() - submitStart, confirm: 0 },
     };
@@ -589,8 +595,9 @@ export function createCycleDeps(
       streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
     },
     chain: {
-      findRootOnChain: (root) =>
-        chainFindRootOnChain(chain.contract, provider, root),
+      findRootOnChain: (root) => chainFindRootOnChain(chain.contract, root),
+      findRootBlock: (root) =>
+        chainFindRootBlock(chain.contract, provider, root),
       submitRoot: (root, size, batchId) =>
         chainSubmitRoot(chain.contract, provider, root, size, batchId, {
           retries: config.txRetries,
