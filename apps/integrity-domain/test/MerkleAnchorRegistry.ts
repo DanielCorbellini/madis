@@ -160,12 +160,12 @@ describe("MerkleAnchorRegistry", function () {
         expect(rootAtIndex0).to.equal(hashToBeAnchored1);
         expect(rootAtIndex1).to.equal(hashToBeAnchored2);
 
-        const indexOfRoot1 =
-          await MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored1);
-        const indexOfRoot2 =
-          await MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored2);
-        expect(indexOfRoot1).to.equal(0);
-        expect(indexOfRoot2).to.equal(1);
+        const batchIdOfRoot1 =
+          await MerkleAnchorRegistry.getBatchIdByRoot(hashToBeAnchored1);
+        const batchIdOfRoot2 =
+          await MerkleAnchorRegistry.getBatchIdByRoot(hashToBeAnchored2);
+        expect(batchIdOfRoot1).to.equal(1);
+        expect(batchIdOfRoot2).to.equal(2);
       });
     });
   });
@@ -217,13 +217,13 @@ describe("MerkleAnchorRegistry", function () {
     });
   });
 
-  describe("getMerkleRootIndex", function () {
+  describe("getBatchIdByRoot", function () {
     describe("Custom Errors", function () {
       it("should revert with RootDoesNotExist when the merkle root is not found", async function () {
         const hashToBeAnchored = ethers.keccak256(toUtf8Bytes("testData"));
 
         await expect(
-          MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored),
+          MerkleAnchorRegistry.getBatchIdByRoot(hashToBeAnchored),
         ).to.be.revertedWithCustomError(
           MerkleAnchorRegistry,
           "RootDoesNotExist",
@@ -232,20 +232,85 @@ describe("MerkleAnchorRegistry", function () {
     });
 
     describe("Function Call", function () {
-      it("should return the correct index for an existing merkle root", async function () {
+      it("should return the batch id each root was anchored under", async function () {
         const hashToBeAnchored1 = ethers.keccak256(toUtf8Bytes("testData1"));
         const hashToBeAnchored2 = ethers.keccak256(toUtf8Bytes("testData2"));
 
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 1);
-        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 2);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored1, 10, 42);
+        await MerkleAnchorRegistry.addMerkleRoot(hashToBeAnchored2, 15, 7);
 
         expect(
-          await MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored1),
-        ).to.equal(0);
+          await MerkleAnchorRegistry.getBatchIdByRoot(hashToBeAnchored1),
+        ).to.equal(42);
         expect(
-          await MerkleAnchorRegistry.getMerkleRootIndex(hashToBeAnchored2),
-        ).to.equal(1);
+          await MerkleAnchorRegistry.getBatchIdByRoot(hashToBeAnchored2),
+        ).to.equal(7);
       });
+
+      it("should distinguish batch id 0 from a root that was never anchored", async function () {
+        const anchored = ethers.keccak256(toUtf8Bytes("testData-zero"));
+        const neverAnchored = ethers.keccak256(toUtf8Bytes("testData-never"));
+
+        await MerkleAnchorRegistry.addMerkleRoot(anchored, 3, 0);
+
+        expect(await MerkleAnchorRegistry.getBatchIdByRoot(anchored)).to.equal(
+          0,
+        );
+        expect(await MerkleAnchorRegistry.containsMerkleRoot(anchored)).to.be
+          .true;
+        await expect(
+          MerkleAnchorRegistry.getBatchIdByRoot(neverAnchored),
+        ).to.be.revertedWithCustomError(
+          MerkleAnchorRegistry,
+          "RootDoesNotExist",
+        );
+      });
+    });
+  });
+
+  describe("getBatchIdsPaged", function () {
+    it("should return an empty array when no roots are stored", async function () {
+      expect(await MerkleAnchorRegistry.getBatchIdsPaged(0, 10)).to.deep.equal(
+        [],
+      );
+    });
+
+    it("should return batch ids in anchoring order, independent of id value", async function () {
+      await MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 1, 30);
+      await MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 1, 5);
+      await MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 1, 18);
+
+      expect(await MerkleAnchorRegistry.getBatchIdsPaged(0, 10)).to.deep.equal([
+        30n,
+        5n,
+        18n,
+      ]);
+    });
+
+    it("should honour offset and limit and clamp to the stored range", async function () {
+      for (const batchId of [1, 2, 3, 4, 5]) {
+        await MerkleAnchorRegistry.addMerkleRoot(
+          ethers.randomBytes(32),
+          1,
+          batchId,
+        );
+      }
+
+      expect(await MerkleAnchorRegistry.getBatchIdsPaged(1, 2)).to.deep.equal([
+        2n,
+        3n,
+      ]);
+      expect(await MerkleAnchorRegistry.getBatchIdsPaged(3, 10)).to.deep.equal(
+        [4n, 5n],
+      );
+    });
+
+    it("should return an empty array when the offset is out of bounds", async function () {
+      await MerkleAnchorRegistry.addMerkleRoot(ethers.randomBytes(32), 1, 1);
+
+      expect(await MerkleAnchorRegistry.getBatchIdsPaged(5, 10)).to.deep.equal(
+        [],
+      );
     });
   });
 
