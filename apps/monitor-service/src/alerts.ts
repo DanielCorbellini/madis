@@ -4,7 +4,9 @@ import type { Queryable } from "service-runtime";
  * Records a root/count divergence for a batch — deduped per `batch_id`
  * so a repeatedly-audited batch doesn't spam alerts. `expectedRoot` is
  * null when there's no root to report (a `confirmed` batch missing
- * on-chain `BatchInfo`).
+ * on-chain `BatchInfo`). A null `batchId` is the whole-system count alert:
+ * it only dedupes against rows with no `expected_root`, since
+ * `recordMissingBatch` also writes null-`batch_id` rows, keyed by root.
  */
 export async function recordRootDivergence(
   db: Queryable,
@@ -22,6 +24,10 @@ export async function recordRootDivergence(
           source = 'monitor'
           AND alert_type = 'root_divergence'
           AND batch_id IS NOT DISTINCT FROM $1
+          AND (
+              $1::bigint IS NOT NULL
+              OR expected_root IS NULL
+          )
       LIMIT
           1
     `,
