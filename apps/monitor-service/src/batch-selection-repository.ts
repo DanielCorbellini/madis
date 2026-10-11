@@ -13,10 +13,10 @@ export async function findConfirmedBatchIds(db: Queryable): Promise<number[]> {
 }
 
 /**
- * Every batch this cycle must individually verify still exists on-chain
- * a `'submitted'` batch is the one status counted by the
- * root count check (below) that isn't already covered by the confirmed
- * rescan, so it's the only status a padding attack could otherwise use.
+ * Every batch this cycle must individually verify still exists on-chain.
+ * A `'submitted'` batch is counted as tracked but is not part of the confirmed
+ * rescan, so it's the status a padding row would use; the stale check below
+ * is what catches one that never lands.
  */
 export async function findSubmittedBatchIds(db: Queryable): Promise<number[]> {
   const { rows } = await db.query(
@@ -38,14 +38,31 @@ export async function countTrackedBatches(db: Queryable): Promise<number> {
   return Number((rows as Array<{ count: string }>)[0].count);
 }
 
+export type BatchStatus = "pending" | "submitted" | "confirmed" | "failed";
+
 /**
- * The ids Postgres currently tracks as on-chain-or-on-the-way — the same
- * statuses `countTrackedBatches` counts. Diffed against the chain's own list
- * of batch ids to name a deleted batch when the two counts disagree.
+ * The Postgres status of each requested batch id — ids with no `batches` row
+ * are simply absent from the result. Callers pass the chain's own list of
+ * batch ids, so which batches to look at is never decided by Postgres; this
+ * only reports what Postgres currently says about them.
  */
-export async function findTrackedBatchIds(db: Queryable): Promise<number[]> {
+export async function findBatchStatuses(
+  db: Queryable,
+  batchIds: number[],
+): Promise<Map<number, BatchStatus>> {
+  if (batchIds.length === 0) {
+    return new Map();
+  }
+
   const { rows } = await db.query(
-    `SELECT id FROM batches WHERE status IN ('confirmed', 'submitted') ORDER BY id ASC`,
+    `SELECT id, status FROM batches WHERE id = ANY($1::bigint[])`,
+    [batchIds],
   );
-  return (rows as Array<{ id: string }>).map((row) => Number(row.id));
+
+  return new Map(
+    (rows as Array<{ id: string; status: BatchStatus }>).map((row) => [
+      Number(row.id),
+      row.status,
+    ]),
+  );
 }
