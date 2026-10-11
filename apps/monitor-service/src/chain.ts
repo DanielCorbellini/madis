@@ -41,10 +41,7 @@ export function createReadOnlyChainClient(
  * decoded and aborted immediately instead of retried; only network/RPC-shaped
  * failures (timeout, connection reset, rate limit) get retried.
  */
-function retryTransient<T>(
-  fn: () => Promise<T>,
-  retries: number,
-): Promise<T> {
+function retryTransient<T>(fn: () => Promise<T>, retries: number): Promise<T> {
   return pRetry(
     async () => {
       try {
@@ -79,22 +76,47 @@ export function createRetryingContract(
   };
 }
 
+const BATCH_PAGE_SIZE = 500;
+
 /**
  * Every `(batchId, root)` the contract has ever accepted, read from the
- * `RootAdded` event log — chain-sourced, so a deleted Postgres row can't hide
- * from it. Used only to name the batches behind a root-count mismatch.
+ * contract's own stored state in pages (`getBatchIdsPaged` +
+ * `getMerkleRootsPaged`, both in anchoring order) — chain-sourced, so a deleted
+ * or re-labelled Postgres row can't hide from it, and unlike an event scan it
+ * never hits a provider's `getLogs` range limit.
  */
 export async function listAnchoredBatches(
-  contract: Pick<MerkleAnchorRegistryLike, "filters" | "queryFilter">,
-  options: { retries: number },
+  contract: Pick<
+    MerkleAnchorRegistryLike,
+    "getBatchIdsPaged" | "getMerkleRootsPaged"
+  >,
+  options: { retries: number; pageSize?: number },
 ): Promise<AnchoredBatch[]> {
-  const logs = await retryTransient(
-    () => contract.queryFilter(contract.filters.RootAdded()),
-    options.retries,
-  );
+  const pageSize = options.pageSize ?? BATCH_PAGE_SIZE;
+  const batches: AnchoredBatch[] = [];
 
-  return logs.map((log) => ({
-    batchId: Number(log.args.batchId),
-    root: log.args.root,
-  }));
+  for (let offset = 0; ; offset += pageSize) {
+    const [batchIds, roots] = await retryTransient(
+      () =>
+        Promise.all([
+          contract.getBatchIdsPaged(offset, pageSize),
+          contract.getMerkleRootsPaged(offset, pageSize),
+        ]),
+      options.retries,
+    );
+
+    if (batchIds.length !== roots.length) {
+      throw new Error(
+        `on-chain batch ids and roots disagree in length at offset ${offset} (${batchIds.length} ids, ${roots.length} roots)`,
+      );
+    }
+
+    batches.push(
+      ...batchIds.map((batchId, i) => ({ batchId, root: roots[i] })),
+    );
+
+    if (batchIds.length < pageSize) {
+      return batches;
+    }
+  }
 }
