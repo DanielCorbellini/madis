@@ -17,12 +17,14 @@ import {
   countTrackedBatches as dbCountTrackedBatches,
   findConfirmedBatchIds as dbFindConfirmedBatchIds,
   findSubmittedBatchIds as dbFindSubmittedBatchIds,
-  findTrackedBatchIds as dbFindTrackedBatchIds,
+  findBatchStatuses as dbFindBatchStatuses,
+  type BatchStatus,
 } from "./batch-selection-repository.ts";
 import {
   checkRootCount,
-  findMissingBatches,
+  classifyOnChainBatches,
   type AnchoredBatch,
+  type OnChainBatchClassification,
 } from "./root-count-check.ts";
 import { createStaleSubmittedTracker } from "./stale-submitted-tracker.ts";
 
@@ -32,7 +34,7 @@ export interface CycleDeps {
     findConfirmedBatchIds(): Promise<number[]>;
     findSubmittedBatchIds(): Promise<number[]>;
     countTrackedBatches(): Promise<number>;
-    findTrackedBatchIds(): Promise<number[]>;
+    findBatchStatuses(batchIds: number[]): Promise<Map<number, BatchStatus>>;
   };
   chain: {
     getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
@@ -69,36 +71,38 @@ export interface MonitorCycleSummary {
 }
 
 /**
- * On a root-count mismatch only: diff the chain's own `(batchId, root)` list
- * against the ids Postgres still tracks. A failure here must never break the
- * cycle, so it degrades to "nothing named" and the caller falls back to the
- * generic count alert.
+ * Reads the chain's own `(batchId, root)` list and sorts it against what
+ * Postgres says about those ids. A failure here must never break the cycle, so
+ * it degrades to `null` and the caller falls back to the Postgres-driven
+ * checks (confirmed rescan + generic count alert).
  */
-async function nameMissingBatches(
+async function classifyChainBatches(
   deps: Pick<CycleDeps, "chain" | "batches">,
   logger: Logger,
-): Promise<AnchoredBatch[]> {
+): Promise<OnChainBatchClassification | null> {
   try {
-    const [onChain, trackedIds] = await Promise.all([
-      deps.chain.listAnchoredBatches(),
-      deps.batches.findTrackedBatchIds(),
-    ]);
+    const onChain = await deps.chain.listAnchoredBatches();
+    const statuses = await deps.batches.findBatchStatuses(
+      onChain.map((batch) => batch.batchId),
+    );
 
-    return findMissingBatches(onChain, trackedIds);
+    return classifyOnChainBatches(onChain, statuses);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn(
       { err: message },
-      "could not name the batches behind the root-count mismatch; falling back to the generic alert",
+      "could not read the chain's batch list; auditing confirmed batches only and falling back to the generic count alert",
     );
-    return [];
+    return null;
   }
 }
 
 /**
  * Sequences one full monitor cycle:
- * 1. the root count check,
- * 2. a full rescan of every confirmed batch, and
+ * 1. the chain's batch list (missing/inconsistent batches) and the root
+ *    count check,
+ * 2. a full audit of every confirmed batch plus every on-chain batch that
+ *    still has a row, whatever its `status`, and
  * 3. the stale-submitted check.
  * Results from all three are aggregated into one structured summary
  * logged at the end.
@@ -130,6 +134,27 @@ export async function runMonitorCycle(
     return checkRootCount(onChainRootCount, trackedBatchCount);
   });
 
+  const classification = await classifyChainBatches(deps, logger);
+
+  // The chain knows every batch it accepted, so a batch Postgres lost track of
+  // is named whether or not the counts happen to agree (a forged 'submitted'
+  // row can pad the count back to equal).
+  for (const batch of classification?.missing ?? []) {
+    const detail = `batch ${batch.batchId} (root ${batch.root}) was accepted on-chain but is no longer tracked as confirmed/submitted in Postgres — its batches row was likely deleted or its status tampered`;
+
+    logger.error({ batchId: batch.batchId, root: batch.root }, detail);
+    await deps.alerts.recordMissingBatch(batch.root, detail);
+    alertsFired++;
+  }
+
+  for (const batch of classification?.inconsistent ?? []) {
+    const detail = `batch ${batch.batchId} (root ${batch.root}) was accepted on-chain but Postgres lists it as '${batch.status}' — its status was likely tampered`;
+
+    logger.error({ batchId: batch.batchId, root: batch.root }, detail);
+    await deps.alerts.recordMissingBatch(batch.root, detail);
+    alertsFired++;
+  }
+
   if (!rootCountResult.matches) {
     const message = `on-chain root count ${rootCountResult.onChainRootCount} does not match ${rootCountResult.trackedBatchCount} batches tracked as confirmed/submitted in Postgres — a batch was likely deleted or had its status tampered`;
 
@@ -141,28 +166,32 @@ export async function runMonitorCycle(
       message,
     );
 
-    // The chain knows every batch id it accepted: name the ones Postgres no
-    // longer tracks. Only when none can be named (the opposite anomaly, or the
-    // listing failed) does the generic count alert fire instead.
-    const missing = await nameMissingBatches(deps, logger);
+    // The per-batch alerts above already explain the mismatch when they exist;
+    // only an unexplained one (the opposite anomaly, or the listing failed)
+    // falls back to the generic whole-system alert.
+    const explained =
+      (classification?.missing.length ?? 0) +
+        (classification?.inconsistent.length ?? 0) >
+      0;
 
-    if (missing.length > 0) {
-      for (const batch of missing) {
-        const detail = `batch ${batch.batchId} (root ${batch.root}) was accepted on-chain but is no longer tracked as confirmed/submitted in Postgres — its batches row was likely deleted or its status tampered`;
-
-        logger.error({ batchId: batch.batchId, root: batch.root }, detail);
-        await deps.alerts.recordMissingBatch(batch.root, detail);
-        alertsFired++;
-      }
-    } else {
+    if (!explained) {
       await deps.alerts.recordRootDivergence(null, null, message);
       alertsFired++;
     }
   }
 
-  const { result: batchIds, ms: findMs } = await timed(() =>
-    deps.batches.findConfirmedBatchIds(),
-  );
+  // Audit every batch Postgres calls confirmed, plus every batch the chain
+  // accepted that Postgres still has a row for — whatever status that row
+  // claims, so flipping `status` cannot take a batch out of the audit.
+  const { result: batchIds, ms: findMs } = await timed(async () => {
+    const confirmed = await deps.batches.findConfirmedBatchIds();
+    const seen = new Set(confirmed);
+
+    return [
+      ...confirmed,
+      ...(classification?.auditable ?? []).filter((id) => !seen.has(id)),
+    ];
+  });
 
   let batchesChecked = 0;
   let batchesComplete = 0;
@@ -304,7 +333,7 @@ export function createCycleDeps(
       findConfirmedBatchIds: () => dbFindConfirmedBatchIds(pool),
       findSubmittedBatchIds: () => dbFindSubmittedBatchIds(pool),
       countTrackedBatches: () => dbCountTrackedBatches(pool),
-      findTrackedBatchIds: () => dbFindTrackedBatchIds(pool),
+      findBatchStatuses: (batchIds) => dbFindBatchStatuses(pool, batchIds),
     },
     chain: {
       getBatchInfo: (batchId) => auditDeps.chain.getBatchInfo(batchId),
