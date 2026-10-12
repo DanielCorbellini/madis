@@ -330,10 +330,35 @@ async function reconcileSubmitted(
   );
 
   switch (outcome.kind) {
-    case "confirmed":
+    case "confirmed": {
+      // The row's transaction_hash is as writable as its merkle_root: a
+      // confirmed receipt only proves *some* transaction was mined, not that it
+      // anchored this batch. An honest confirmed addMerkleRoot always leaves
+      // the root on-chain, so ask the chain again (it can have landed since the
+      // fast path) and only confirm a root owned by this very batch.
+      const owner = await deps.findRootOnChain(batch.merkleRoot);
+
+      if (!owner) {
+        await failUnreconcilable(
+          deps,
+          batch,
+          logger,
+          summary,
+          `batch ${batch.id}: transaction ${batch.transactionHash} is confirmed but root ${batch.merkleRoot} is not on-chain — the transaction does not belong to this batch, and its row was likely tampered with`,
+          null,
+        );
+        return;
+      }
+
+      if (owner.ownerBatchId !== batch.id) {
+        await settleOwnedRoot(deps, batch, owner, logger, summary);
+        return;
+      }
+
       await deps.markConfirmed(batch.id, outcome.block);
       summary.confirmed++;
       return;
+    }
 
     case "reverted":
       logger.warn(
