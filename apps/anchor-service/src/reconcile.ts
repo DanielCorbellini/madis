@@ -3,6 +3,7 @@ import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
 import type { AnchorableRecord, Logger } from "service-runtime";
 import {
+  recordBatchDivergence as dbRecordBatchDivergence,
   recordDuplicateRoot as dbRecordDuplicateRoot,
   recordHashFailure as dbRecordHashFailure,
   duplicateRootMessage,
@@ -63,6 +64,12 @@ export interface ReconcileDeps {
   recordDuplicateRoot(
     batchId: number | null,
     root: string,
+    details: string,
+  ): Promise<boolean>;
+  recordBatchDivergence(
+    batchId: number,
+    expectedRoot: string,
+    actualRoot: string | null,
     details: string,
   ): Promise<boolean>;
 }
@@ -161,6 +168,53 @@ async function settleAlreadyOnChain(
 }
 
 /**
+ * Thrown by `rebuildTreeRoot` when a batch has no `anchor_records` at all, so
+ * there is nothing to rebuild its root from (every pin was deleted, or the row
+ * was forged). Like `RebuildHashError`, it fails this one batch loudly instead
+ * of aborting the whole reconcile pass — a single unrebuildable row must not be
+ * able to stop every other batch (or the rest of the cycle) from running.
+ */
+export class EmptyBatchError extends Error {
+  constructor(batchId: number) {
+    super(`batch ${batchId} has no anchor_records to rebuild its tree from`);
+
+    this.name = "EmptyBatchError";
+  }
+}
+
+/**
+ * A batch that can't be reconciled safely (rows diverge from the stored root,
+ * nothing to rebuild from, or an impossible recorded state): never resend or
+ * confirm it, mark it failed and raise an anchor-side alert. An already-failed
+ * batch is re-evaluated every Phase 0, so it isn't re-marked (that would grow
+ * `retry_count` forever) or re-counted, and its alert is written only once.
+ */
+async function failUnreconcilable(
+  deps: Pick<ReconcileDeps, "markFailed" | "recordBatchDivergence">,
+  batch: Batch,
+  logger: Logger,
+  summary: ReconcileSummary,
+  message: string,
+  rebuiltRoot: string | null,
+): Promise<void> {
+  if (batch.status !== "failed") {
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+  }
+
+  const isNew = await deps.recordBatchDivergence(
+    batch.id,
+    batch.merkleRoot,
+    rebuiltRoot,
+    message,
+  );
+  logger[isNew ? "error" : "warn"](
+    { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
+    message,
+  );
+}
+
+/**
  * Thrown by `rebuildTreeRoot` when a record's own data can't even be hashed
  * (e.g. a malformed `client_address`) — distinguished from the plain `Error`
  * thrown for an empty batch (an invariant violation, meant to propagate and
@@ -256,9 +310,18 @@ async function reconcileSubmitted(
   summary: ReconcileSummary,
 ): Promise<void> {
   if (!batch.transactionHash) {
-    throw new Error(
-      `batch ${batch.id} is 'submitted' but has no transaction hash — invariant violation`,
+    // Impossible for a batch this service submitted (markSubmitted always sets
+    // the hash): the row was altered. With no transaction to inspect or resend
+    // there is nothing safe to do but fail it and say so.
+    await failUnreconcilable(
+      deps,
+      batch,
+      logger,
+      summary,
+      `batch ${batch.id} is 'submitted' but has no transaction hash — it cannot be inspected or resent, and its row was likely tampered with`,
+      null,
     );
+    return;
   }
 
   const outcome = await deps.inspectTransaction(
@@ -294,6 +357,18 @@ async function reconcileSubmitted(
       try {
         rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
       } catch (error) {
+        if (error instanceof EmptyBatchError) {
+          await failUnreconcilable(
+            deps,
+            batch,
+            logger,
+            summary,
+            `${error.message} — not resent; its pins were likely deleted or the row was forged`,
+            null,
+          );
+          return;
+        }
+
         if (error instanceof RebuildHashError) {
           logger.error(
             { batchId: batch.id, err: error.message },
@@ -310,15 +385,14 @@ async function reconcileSubmitted(
       }
 
       if (rebuiltRoot !== batch.merkleRoot) {
-        const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering while the transaction was stuck, not auto-resent`;
-
-        logger.error(
-          { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
-          message,
+        await failUnreconcilable(
+          deps,
+          batch,
+          logger,
+          summary,
+          `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering while the transaction was stuck, not auto-resent`,
+          rebuiltRoot,
         );
-
-        await deps.markFailed(batch.id, message);
-        summary.failed++;
         return;
       }
 
@@ -367,9 +441,7 @@ async function rebuildTreeRoot(
   }
 
   if (entries.length === 0) {
-    throw new Error(
-      `batch ${batchId} has no anchor_records to rebuild its tree from`,
-    );
+    throw new EmptyBatchError(batchId);
   }
 
   return buildAnchorTree(entries).root;
@@ -386,6 +458,18 @@ async function reconcileFailed(
   try {
     rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
   } catch (error) {
+    if (error instanceof EmptyBatchError) {
+      await failUnreconcilable(
+        deps,
+        batch,
+        logger,
+        summary,
+        `${error.message} — not resent; its pins were likely deleted or the row was forged`,
+        null,
+      );
+      return;
+    }
+
     if (error instanceof RebuildHashError) {
       logger.error({ batchId: batch.id, err: error.message }, error.message);
       await deps.markFailed(batch.id, error.message);
@@ -398,15 +482,14 @@ async function reconcileFailed(
   }
 
   if (rebuiltRoot !== batch.merkleRoot) {
-    const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`;
-
-    logger.error(
-      { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
-      message,
+    await failUnreconcilable(
+      deps,
+      batch,
+      logger,
+      summary,
+      `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`,
+      rebuiltRoot,
     );
-
-    await deps.markFailed(batch.id, message);
-    summary.failed++;
     return;
   }
 
@@ -483,5 +566,7 @@ export function createReconcileDeps(
       dbRecordHashFailure(pool, recordId, batchId, details),
     recordDuplicateRoot: (batchId, root, details) =>
       dbRecordDuplicateRoot(pool, batchId, root, details),
+    recordBatchDivergence: (batchId, expectedRoot, actualRoot, details) =>
+      dbRecordBatchDivergence(pool, batchId, expectedRoot, actualRoot, details),
   };
 }
