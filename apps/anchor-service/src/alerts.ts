@@ -137,6 +137,56 @@ export async function recordDuplicateRoot(
   return true;
 }
 
+/**
+ * Records that a batch can no longer be reconciled safely: its rows cannot
+ * rebuild the root it was stored with (a pin or record was deleted or edited),
+ * its recorded state is impossible (e.g. `submitted` with no transaction hash),
+ * or it has no pins at all. `expected_root` is the batch's stored root,
+ * `actual_root` the root rebuilt from its current rows (null when there was
+ * nothing to rebuild from). Deduped by `batch_id`: a stuck batch is
+ * re-evaluated every Phase 0 but alerted only once. Returns whether a new row
+ * was written.
+ */
+export async function recordBatchDivergence(
+  db: Queryable,
+  batchId: number,
+  expectedRoot: string,
+  actualRoot: string | null,
+  details: string,
+): Promise<boolean> {
+  const existing = await db.query(
+    `
+      SELECT
+          1
+      FROM
+          integrity_alerts
+      WHERE
+          source = 'anchor'
+          AND alert_type = 'root_divergence'
+          AND batch_id = $1
+      LIMIT
+          1
+    `,
+    [batchId],
+  );
+
+  if (existing.rows.length > 0) {
+    return false;
+  }
+
+  await db.query(
+    `
+      INSERT INTO
+          integrity_alerts (alert_type, source, batch_id, expected_root, actual_root, details)
+      VALUES
+          ('root_divergence', 'anchor', $1, $2, $3, $4)
+    `,
+    [batchId, expectedRoot, actualRoot, details],
+  );
+
+  return true;
+}
+
 export function duplicateRootMessage(args: {
   batchId: number;
   root: string;
