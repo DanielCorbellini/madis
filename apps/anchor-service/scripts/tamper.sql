@@ -115,6 +115,75 @@ WHERE
             anchor_records
     );
 
+-- --- Scenario 12: inject a forged record AND a forged pin into a confirmed batch
+-- --- (the "extra member" direction: pin count ends one above the on-chain size).
+-- --- One transaction, so anchor-service never sees the forged record unpinned.
+-- --- app_user already has INSERT on both tables; no admin privilege needed. ---
+BEGIN;
+
+WITH next_id AS (
+    SELECT
+        nextval('records_id_seq') AS id
+),
+new_record AS (
+    INSERT INTO
+        records (id, entity_id, record_type, payload, version, client_address, signature)
+    SELECT
+        id,
+        id,
+        'prescription',
+        '{"forged": true}'::jsonb,
+        1,
+        '[0x + 40 hex chars, e.g. the whitelisted address]',
+        '[any signature text]'
+    FROM
+        next_id
+    RETURNING
+        id
+)
+INSERT INTO
+    anchor_records (record_id, batch_id, merkle_proof)
+SELECT
+    id,
+    [batch id],
+    '["0x[64 hex chars]"]'::jsonb
+FROM
+    new_record
+RETURNING
+    record_id;
+
+COMMIT;
+
+-- --- Scenario 13: flip a confirmed batch to 'submitted' and delete one of its
+-- --- records (note the batch's merkle_root and transaction_hash first) ---
+BEGIN;
+
+UPDATE batches
+SET
+    status = 'submitted'
+WHERE
+    id = [batch id];
+
+DELETE FROM anchor_records
+WHERE
+    record_id = [record id];
+
+DELETE FROM records
+WHERE
+    id = [record id];
+
+COMMIT;
+
+-- 13b (transaction_hash alone does NOT stop the heal: Phase 0 finds the root
+-- on-chain via merkle_root first). 13c: also corrupt merkle_root so
+-- anchor-service can neither find the root nor reach a transaction to inspect.
+UPDATE batches
+SET
+    transaction_hash = NULL,
+    merkle_root = '[fake 0x + 64 hex chars]'
+WHERE
+    id = [batch id];
+
 -- --- Read-only: check what fired ---
 SELECT
     *
