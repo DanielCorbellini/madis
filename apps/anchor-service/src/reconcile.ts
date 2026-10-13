@@ -216,10 +216,9 @@ async function failUnreconcilable(
 
 /**
  * Thrown by `rebuildTreeRoot` when a record's own data can't even be hashed
- * (e.g. a malformed `client_address`) — distinguished from the plain `Error`
- * thrown for an empty batch (an invariant violation, meant to propagate and
- * abort the whole reconcile pass) so callers can instead treat this one
- * batch as failed and keep reconciling the rest.
+ * (e.g. a malformed `client_address`) — like `EmptyBatchError`, it lets callers
+ * treat this one batch as failed and keep reconciling the rest instead of
+ * aborting the whole pass.
  */
 export class RebuildHashError extends Error {
   constructor(batchId: number, recordId: number, cause: unknown) {
@@ -344,7 +343,7 @@ async function reconcileSubmitted(
           batch,
           logger,
           summary,
-          `batch ${batch.id}: transaction ${batch.transactionHash} is confirmed but root ${batch.merkleRoot} is not on-chain — the transaction does not belong to this batch, and its row was likely tampered with`,
+          `batch ${batch.id}: transaction ${batch.transactionHash} is confirmed but root ${batch.merkleRoot} is not on-chain — the row's merkle_root or transaction_hash was altered, so this transaction cannot be tied to the batch`,
           null,
         );
         return;
