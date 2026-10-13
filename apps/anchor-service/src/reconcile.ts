@@ -2,7 +2,12 @@ import { computeLeafHash } from "crypto-utils";
 import type { ContractTransactionResponse } from "ethers/contract";
 import type { Pool } from "pg";
 import type { AnchorableRecord, Logger } from "service-runtime";
-import { recordHashFailure as dbRecordHashFailure } from "./alerts.ts";
+import {
+  recordBatchDivergence as dbRecordBatchDivergence,
+  recordDuplicateRoot as dbRecordDuplicateRoot,
+  recordHashFailure as dbRecordHashFailure,
+  duplicateRootMessage,
+} from "./alerts.ts";
 import {
   type Batch,
   type BatchStatus,
@@ -14,8 +19,10 @@ import {
 } from "./batch-repository.ts";
 import {
   type BlockRef,
+  findRootBlock as chainFindRootBlock,
   findRootOnChain as chainFindRootOnChain,
   inspectTransaction as chainInspectTransaction,
+  type OnChainRootOwner,
   type ReceiptOutcome,
 } from "./chain-confirm.ts";
 import {
@@ -32,7 +39,8 @@ export interface ReconcileDeps {
   markSubmitted(batchId: number, txHash: string): Promise<void>;
   markConfirmed(batchId: number, block: BlockRef): Promise<void>;
   markFailed(batchId: number, errorMessage: string): Promise<void>;
-  findRootOnChain(root: string): Promise<BlockRef | null>;
+  findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
+  findRootBlock(root: string): Promise<BlockRef>;
   submitRoot(
     root: string,
     size: number,
@@ -53,6 +61,17 @@ export interface ReconcileDeps {
     batchId: number,
     details: string,
   ): Promise<boolean>;
+  recordDuplicateRoot(
+    batchId: number | null,
+    root: string,
+    details: string,
+  ): Promise<boolean>;
+  recordBatchDivergence(
+    batchId: number,
+    expectedRoot: string,
+    actualRoot: string | null,
+    details: string,
+  ): Promise<boolean>;
 }
 
 export interface ReconcileSummary {
@@ -64,6 +83,135 @@ export interface ReconcileSummary {
 export interface ReconcileOptions {
   confirmations: number;
   retryAlertThreshold: number;
+}
+
+/**
+ * The batch's root is already on-chain. Only a root owned by THIS batch id
+ * means "my batch is confirmed". A root owned by a different batch id can
+ * never give this batch its own `BatchInfo`: don't confirm it — mark it
+ * failed with an explicit message and alert once. Its anchor_records pins
+ * already exist and can't be moved (no UPDATE/DELETE grant).
+ */
+async function settleOwnedRoot(
+  deps: Pick<
+    ReconcileDeps,
+    "findRootBlock" | "markConfirmed" | "markFailed" | "recordDuplicateRoot"
+  >,
+  batch: Batch,
+  owner: OnChainRootOwner,
+  logger: Logger,
+  summary: ReconcileSummary,
+): Promise<void> {
+  if (owner.ownerBatchId === batch.id) {
+    // The block is only needed to record this batch's own confirmation.
+    await deps.markConfirmed(
+      batch.id,
+      await deps.findRootBlock(batch.merkleRoot),
+    );
+    summary.confirmed++;
+    return;
+  }
+
+  const message = duplicateRootMessage({
+    batchId: batch.id,
+    root: batch.merkleRoot,
+    ownerBatchId: owner.ownerBatchId,
+  });
+
+  // An already-failed batch is re-detected every Phase 0: it isn't a new
+  // failure, so don't bump retry_count or the summary again.
+  if (batch.status !== "failed") {
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+  }
+
+  const isNew = await deps.recordDuplicateRoot(
+    batch.id,
+    batch.merkleRoot,
+    message,
+  );
+  logger[isNew ? "error" : "warn"](
+    { batchId: batch.id, ownerBatchId: owner.ownerBatchId },
+    message,
+  );
+}
+
+/**
+ * `submitRoot` reported `RootAlreadyExists`: find out who owns the root and
+ * settle the batch accordingly.
+ */
+async function settleAlreadyOnChain(
+  deps: Pick<
+    ReconcileDeps,
+    | "findRootBlock"
+    | "findRootOnChain"
+    | "markConfirmed"
+    | "markFailed"
+    | "recordDuplicateRoot"
+  >,
+  batch: Batch,
+  logger: Logger,
+  summary: ReconcileSummary,
+): Promise<void> {
+  const owner = await deps.findRootOnChain(batch.merkleRoot);
+
+  if (!owner) {
+    const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
+    logger.error({ batchId: batch.id }, message);
+
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+    return;
+  }
+
+  await settleOwnedRoot(deps, batch, owner, logger, summary);
+}
+
+/**
+ * Thrown by `rebuildTreeRoot` when a batch has no `anchor_records` at all, so
+ * there is nothing to rebuild its root from (every pin was deleted, or the row
+ * was forged). Like `RebuildHashError`, it fails this one batch loudly instead
+ * of aborting the whole reconcile pass — a single unrebuildable row must not be
+ * able to stop every other batch (or the rest of the cycle) from running.
+ */
+export class EmptyBatchError extends Error {
+  constructor(batchId: number) {
+    super(`batch ${batchId} has no anchor_records to rebuild its tree from`);
+
+    this.name = "EmptyBatchError";
+  }
+}
+
+/**
+ * A batch that can't be reconciled safely (rows diverge from the stored root,
+ * nothing to rebuild from, or an impossible recorded state): never resend or
+ * confirm it, mark it failed and raise an anchor-side alert. An already-failed
+ * batch is re-evaluated every Phase 0, so it isn't re-marked (that would grow
+ * `retry_count` forever) or re-counted, and its alert is written only once.
+ */
+async function failUnreconcilable(
+  deps: Pick<ReconcileDeps, "markFailed" | "recordBatchDivergence">,
+  batch: Batch,
+  logger: Logger,
+  summary: ReconcileSummary,
+  message: string,
+  rebuiltRoot: string | null,
+): Promise<void> {
+  if (batch.status !== "failed") {
+    await deps.markFailed(batch.id, message);
+    summary.failed++;
+  }
+
+  const isNew = await deps.recordBatchDivergence(
+    batch.id,
+    batch.merkleRoot,
+    rebuiltRoot,
+    message,
+  );
+  logger[isNew ? "error" : "warn"](
+    { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
+    message,
+  );
 }
 
 /**
@@ -102,11 +250,10 @@ export async function reconcileBatches(
   const batches = await deps.findInFlightBatches();
 
   for (const batch of batches) {
-    const alreadyOnChain = await deps.findRootOnChain(batch.merkleRoot);
+    const existingOwner = await deps.findRootOnChain(batch.merkleRoot);
 
-    if (alreadyOnChain) {
-      await deps.markConfirmed(batch.id, alreadyOnChain);
-      summary.confirmed++;
+    if (existingOwner) {
+      await settleOwnedRoot(deps, batch, existingOwner, logger, summary);
       continue;
     }
 
@@ -147,19 +294,7 @@ async function reconcilePending(
   }
 
   if (result.status === "already-on-chain") {
-    const block = await deps.findRootOnChain(batch.merkleRoot);
-
-    if (!block) {
-      const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
-      logger.error({ batchId: batch.id }, message);
-
-      await deps.markFailed(batch.id, message);
-      summary.failed++;
-      return;
-    }
-
-    await deps.markConfirmed(batch.id, block);
-    summary.confirmed++;
+    await settleAlreadyOnChain(deps, batch, logger, summary);
     return;
   }
 
@@ -175,9 +310,18 @@ async function reconcileSubmitted(
   summary: ReconcileSummary,
 ): Promise<void> {
   if (!batch.transactionHash) {
-    throw new Error(
-      `batch ${batch.id} is 'submitted' but has no transaction hash — invariant violation`,
+    // Impossible for a batch this service submitted (markSubmitted always sets
+    // the hash): the row was altered. With no transaction to inspect or resend
+    // there is nothing safe to do but fail it and say so.
+    await failUnreconcilable(
+      deps,
+      batch,
+      logger,
+      summary,
+      `batch ${batch.id} is 'submitted' but has no transaction hash — it cannot be inspected or resent, and its row was likely tampered with`,
+      null,
     );
+    return;
   }
 
   const outcome = await deps.inspectTransaction(
@@ -186,10 +330,35 @@ async function reconcileSubmitted(
   );
 
   switch (outcome.kind) {
-    case "confirmed":
+    case "confirmed": {
+      // The row's transaction_hash is as writable as its merkle_root: a
+      // confirmed receipt only proves *some* transaction was mined, not that it
+      // anchored this batch. An honest confirmed addMerkleRoot always leaves
+      // the root on-chain, so ask the chain again (it can have landed since the
+      // fast path) and only confirm a root owned by this very batch.
+      const owner = await deps.findRootOnChain(batch.merkleRoot);
+
+      if (!owner) {
+        await failUnreconcilable(
+          deps,
+          batch,
+          logger,
+          summary,
+          `batch ${batch.id}: transaction ${batch.transactionHash} is confirmed but root ${batch.merkleRoot} is not on-chain — the transaction does not belong to this batch, and its row was likely tampered with`,
+          null,
+        );
+        return;
+      }
+
+      if (owner.ownerBatchId !== batch.id) {
+        await settleOwnedRoot(deps, batch, owner, logger, summary);
+        return;
+      }
+
       await deps.markConfirmed(batch.id, outcome.block);
       summary.confirmed++;
       return;
+    }
 
     case "reverted":
       logger.warn(
@@ -213,6 +382,18 @@ async function reconcileSubmitted(
       try {
         rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
       } catch (error) {
+        if (error instanceof EmptyBatchError) {
+          await failUnreconcilable(
+            deps,
+            batch,
+            logger,
+            summary,
+            `${error.message} — not resent; its pins were likely deleted or the row was forged`,
+            null,
+          );
+          return;
+        }
+
         if (error instanceof RebuildHashError) {
           logger.error(
             { batchId: batch.id, err: error.message },
@@ -229,15 +410,14 @@ async function reconcileSubmitted(
       }
 
       if (rebuiltRoot !== batch.merkleRoot) {
-        const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering while the transaction was stuck, not auto-resent`;
-
-        logger.error(
-          { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
-          message,
+        await failUnreconcilable(
+          deps,
+          batch,
+          logger,
+          summary,
+          `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering while the transaction was stuck, not auto-resent`,
+          rebuiltRoot,
         );
-
-        await deps.markFailed(batch.id, message);
-        summary.failed++;
         return;
       }
 
@@ -286,9 +466,7 @@ async function rebuildTreeRoot(
   }
 
   if (entries.length === 0) {
-    throw new Error(
-      `batch ${batchId} has no anchor_records to rebuild its tree from`,
-    );
+    throw new EmptyBatchError(batchId);
   }
 
   return buildAnchorTree(entries).root;
@@ -305,6 +483,18 @@ async function reconcileFailed(
   try {
     rebuiltRoot = await rebuildTreeRoot(deps, batch.id);
   } catch (error) {
+    if (error instanceof EmptyBatchError) {
+      await failUnreconcilable(
+        deps,
+        batch,
+        logger,
+        summary,
+        `${error.message} — not resent; its pins were likely deleted or the row was forged`,
+        null,
+      );
+      return;
+    }
+
     if (error instanceof RebuildHashError) {
       logger.error({ batchId: batch.id, err: error.message }, error.message);
       await deps.markFailed(batch.id, error.message);
@@ -317,15 +507,14 @@ async function reconcileFailed(
   }
 
   if (rebuiltRoot !== batch.merkleRoot) {
-    const message = `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`;
-
-    logger.error(
-      { batchId: batch.id, rebuiltRoot, storedRoot: batch.merkleRoot },
-      message,
+    await failUnreconcilable(
+      deps,
+      batch,
+      logger,
+      summary,
+      `batch ${batch.id}: recomputed root ${rebuiltRoot} diverges from stored root ${batch.merkleRoot} — possible tampering, not auto-resolved`,
+      rebuiltRoot,
     );
-
-    await deps.markFailed(batch.id, message);
-    summary.failed++;
     return;
   }
 
@@ -338,17 +527,7 @@ async function reconcileFailed(
     );
 
     if (result.status === "already-on-chain") {
-      const block = await deps.findRootOnChain(batch.merkleRoot);
-
-      if (!block) {
-        const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
-        await deps.markFailed(batch.id, message);
-        summary.failed++;
-        return;
-      }
-
-      await deps.markConfirmed(batch.id, block);
-      summary.confirmed++;
+      await settleAlreadyOnChain(deps, batch, logger, summary);
       return;
     }
 
@@ -389,8 +568,8 @@ export function createReconcileDeps(
     markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
     markFailed: (batchId, errorMessage) =>
       dbMarkFailed(pool, batchId, errorMessage),
-    findRootOnChain: (root) =>
-      chainFindRootOnChain(chain.contract, provider, root),
+    findRootOnChain: (root) => chainFindRootOnChain(chain.contract, root),
+    findRootBlock: (root) => chainFindRootBlock(chain.contract, provider, root),
     submitRoot: (root, size, batchId) =>
       chainSubmitRoot(chain.contract, provider, root, size, batchId, {
         retries: options.retries,
@@ -410,5 +589,9 @@ export function createReconcileDeps(
       ),
     recordHashFailure: (recordId, batchId, details) =>
       dbRecordHashFailure(pool, recordId, batchId, details),
+    recordDuplicateRoot: (batchId, root, details) =>
+      dbRecordDuplicateRoot(pool, batchId, root, details),
+    recordBatchDivergence: (batchId, expectedRoot, actualRoot, details) =>
+      dbRecordBatchDivergence(pool, batchId, expectedRoot, actualRoot, details),
   };
 }

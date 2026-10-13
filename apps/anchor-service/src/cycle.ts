@@ -5,9 +5,14 @@ import {
   snapshotMemory,
   timed,
 } from "service-runtime";
-import { recordSignatureMismatch as dbRecordSignatureMismatch } from "./alerts.ts";
+import {
+  duplicateRootMessage,
+  recordDuplicateRoot as dbRecordDuplicateRoot,
+  recordSignatureMismatch as dbRecordSignatureMismatch,
+} from "./alerts.ts";
 import {
   type AnchorEntry,
+  batchExists as dbBatchExists,
   markConfirmed as dbMarkConfirmed,
   markFailed as dbMarkFailed,
   markSubmitted as dbMarkSubmitted,
@@ -15,7 +20,9 @@ import {
 } from "./batch-repository.ts";
 import {
   type BlockRef,
+  type OnChainRootOwner,
   awaitConfirmation as chainAwaitConfirmation,
+  findRootBlock as chainFindRootBlock,
   findRootOnChain as chainFindRootOnChain,
   RevertedTransactionError,
 } from "./chain-confirm.ts";
@@ -41,7 +48,8 @@ export interface CycleDeps {
     streamUnanchoredRecords(): AsyncGenerator<AnchorableRecord>;
   };
   chain: {
-    findRootOnChain(root: string): Promise<BlockRef | null>;
+    findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
+    findRootBlock(root: string): Promise<BlockRef>;
     submitRoot(
       root: string,
       size: number,
@@ -61,14 +69,26 @@ export interface CycleDeps {
     markSubmitted(batchId: number, txHash: string): Promise<void>;
     markConfirmed(batchId: number, block: BlockRef): Promise<void>;
     markFailed(batchId: number, errorMessage: string): Promise<void>;
+    batchExists(batchId: number): Promise<boolean>;
   };
   alerts: {
     recordSignatureMismatch(
       recordId: number,
       details: string,
     ): Promise<boolean>;
+    recordDuplicateRoot(
+      batchId: number | null,
+      root: string,
+      details: string,
+    ): Promise<boolean>;
   };
 }
+
+/** What `submitAndConfirmBatch` needs — no `records`, no `batchExists`. */
+type SubmitDeps = Pick<CycleDeps, "chain"> & {
+  batches: Omit<CycleDeps["batches"], "batchExists">;
+  alerts: Pick<CycleDeps["alerts"], "recordDuplicateRoot">;
+};
 
 export interface CollectedBatch {
   root: string;
@@ -114,7 +134,9 @@ export type SubmitAndConfirmResult =
  * never calls `buildAnchorTree` with an empty array.
  */
 export async function collectValidBatch(
-  deps: Pick<CycleDeps, "records" | "alerts">,
+  deps: Pick<CycleDeps, "records"> & {
+    alerts: Pick<CycleDeps["alerts"], "recordSignatureMismatch">;
+  },
   whitelistedAddresses: string[],
   logger: Logger,
 ): Promise<CollectedBatch | null> {
@@ -176,6 +198,60 @@ export async function collectValidBatch(
 }
 
 /**
+ * The batch's root is already on-chain. Only a root owned by THIS batch id
+ * means "my batch is confirmed" (the same-batch race this check exists for).
+ * A root owned by a different batch id can never give this batch its own
+ * `BatchInfo`: don't confirm it — mark it failed with an explicit message and
+ * alert once. Its anchor_records pins were persisted before this was known
+ * and can't be moved (no UPDATE/DELETE grant).
+ */
+async function settleOwnedRoot(
+  deps: Pick<SubmitDeps, "batches" | "alerts"> & {
+    chain: Pick<CycleDeps["chain"], "findRootBlock">;
+  },
+  batch: { id: number; merkleRoot: string },
+  owner: OnChainRootOwner,
+  logger: Logger,
+  submitStart: number,
+): Promise<SubmitAndConfirmResult> {
+  if (owner.ownerBatchId === batch.id) {
+    // The block is only needed to record this batch's own confirmation.
+    const block = await deps.chain.findRootBlock(batch.merkleRoot);
+    await deps.batches.markConfirmed(batch.id, block);
+
+    return {
+      status: "confirmed",
+      block,
+      txHash: null,
+      stageMs: { submit: performance.now() - submitStart, confirm: 0 },
+    };
+  }
+
+  const message = duplicateRootMessage({
+    batchId: batch.id,
+    root: batch.merkleRoot,
+    ownerBatchId: owner.ownerBatchId,
+  });
+
+  await deps.batches.markFailed(batch.id, message);
+  const isNew = await deps.alerts.recordDuplicateRoot(
+    batch.id,
+    batch.merkleRoot,
+    message,
+  );
+  logger[isNew ? "error" : "warn"](
+    { batchId: batch.id, ownerBatchId: owner.ownerBatchId },
+    message,
+  );
+
+  return {
+    status: "failed",
+    errorMessage: message,
+    stageMs: { submit: performance.now() - submitStart, confirm: 0 },
+  };
+}
+
+/**
  * Submits a persisted batch's root and waits for confirmations
  * before this same cycle ends. A `RevertedTransactionError` from
  * `awaitConfirmation` is the one deterministic outcome, everything
@@ -183,28 +259,21 @@ export async function collectValidBatch(
  * guessing at its fate; Phase 0 reconciles it next cycle.
  */
 export async function submitAndConfirmBatch(
-  deps: Pick<CycleDeps, "chain" | "batches">,
+  deps: SubmitDeps,
   batch: { id: number; merkleRoot: string; size: number },
   options: { confirmations: number; confirmationTimeoutMs: number },
   logger: Logger,
 ): Promise<SubmitAndConfirmResult> {
   const submitStart = performance.now();
-  const alreadyOnChain = await deps.chain.findRootOnChain(batch.merkleRoot);
+  const existingOwner = await deps.chain.findRootOnChain(batch.merkleRoot);
 
   /**
-   * Check if the root exists to avoid unnecessary send.
-   * This rarely happens, it's a safeguard against racing
-   * conditions across multiple instances of the anchor-service.
+   * Check if the root exists to avoid unnecessary send. Only a root owned by
+   * THIS batch id counts as "my batch is confirmed" — rare, a safeguard
+   * against races between Phase 0 and a live cycle for the same batch.
    */
-  if (alreadyOnChain) {
-    await deps.batches.markConfirmed(batch.id, alreadyOnChain);
-
-    return {
-      status: "confirmed",
-      block: alreadyOnChain,
-      txHash: null,
-      stageMs: { submit: performance.now() - submitStart, confirm: 0 },
-    };
+  if (existingOwner) {
+    return settleOwnedRoot(deps, batch, existingOwner, logger, submitStart);
   }
 
   let result: SubmitResult;
@@ -239,14 +308,14 @@ export async function submitAndConfirmBatch(
    * Safeguard against racing conditions after the submission of a root
    */
   if (result.status === "already-on-chain") {
-    const block = await deps.chain.findRootOnChain(batch.merkleRoot);
+    const racedOwner = await deps.chain.findRootOnChain(batch.merkleRoot);
 
     /**
      * This should never happen, but if it does,
      * log an error and mark the batch as failed.
      * This is a safeguard against inconsistencies in the RPC provider.
      */
-    if (!block) {
+    if (!racedOwner) {
       const message = `addMerkleRoot reported RootAlreadyExists for batch ${batch.id} but the root is not findable on-chain`;
       logger.error({ batchId: batch.id }, message);
       await deps.batches.markFailed(batch.id, message);
@@ -257,13 +326,7 @@ export async function submitAndConfirmBatch(
       };
     }
 
-    await deps.batches.markConfirmed(batch.id, block);
-    return {
-      status: "confirmed",
-      block,
-      txHash: null,
-      stageMs: { submit: performance.now() - submitStart, confirm: 0 },
-    };
+    return settleOwnedRoot(deps, batch, racedOwner, logger, submitStart);
   }
 
   const submitMs = performance.now() - submitStart;
@@ -321,6 +384,7 @@ export async function submitAndConfirmBatch(
  * Sequences one full anchoring cycle:
  * 1. Phase 0 (reconcile in-flight batches),
  * 2. Phases 1–3 (collect a new valid batch, or "nothing to anchor"),
+ * 2b. Phase 3.5 (skip a collection whose root already exists on-chain),
  * 3. Phase 4 (persist),
  * 4. Phases 5–6 (submit + await confirmation)
  * 5. Phase 7 (summary).
@@ -360,6 +424,55 @@ export async function runCycle(
       status: "nothing-to-anchor",
       durationMs: performance.now() - cycleStart,
       stageMs: { reconcile: reconcileMs, collect: collectMs },
+      peakRssBytes: snapshotMemory().rssBytes,
+    });
+  }
+
+  // Phase 3.5: if this exact root is already on-chain (under some batch),
+  // the contract would reject it. Persist nothing and end this collection —
+  // a phantom 'confirmed' row here is the bug this guard exists to prevent.
+  const { result: existingOwner, ms: duplicateCheckMs } = await timed(() =>
+    deps.chain.findRootOnChain(collected.root),
+  );
+
+  if (existingOwner) {
+    const ownerRowExists = await deps.batches.batchExists(
+      existingOwner.ownerBatchId,
+    );
+    const ownerState = ownerRowExists
+      ? `batch ${existingOwner.ownerBatchId} still exists in Postgres, so its anchor_records pins were likely deleted`
+      : `batch ${existingOwner.ownerBatchId} no longer exists in Postgres, so its batches row and pins were likely deleted`;
+    const message = `rebuilt root ${collected.root} already exists on-chain (contract RootAlreadyExists) under batch ${existingOwner.ownerBatchId}; ${ownerState}. Skipping ${collected.entries.length} unpinned record(s): nothing inserted. This clears when a new record changes the set.`;
+
+    const isNew = await deps.alerts.recordDuplicateRoot(
+      null,
+      collected.root,
+      message,
+    );
+    // A stalled set is re-detected every cycle: shout once, then stay visible but quiet.
+    logger[isNew ? "error" : "warn"](
+      { ownerBatchId: existingOwner.ownerBatchId, root: collected.root },
+      message,
+    );
+
+    return buildCycleSummary({
+      cycle: options.cycleNumber,
+      reconciled,
+      scanned: collected.scannedCount,
+      rejected: collected.rejectedCount,
+      batched: 0,
+      root: collected.root,
+      txHash: null,
+      blockNumber: null,
+      gasUsed: null,
+      gasPrice: null,
+      status: "duplicate-skipped",
+      durationMs: performance.now() - cycleStart,
+      stageMs: {
+        reconcile: reconcileMs,
+        ...collected.stageMs,
+        duplicateCheck: duplicateCheckMs,
+      },
       peakRssBytes: snapshotMemory().rssBytes,
     });
   }
@@ -482,8 +595,9 @@ export function createCycleDeps(
       streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
     },
     chain: {
-      findRootOnChain: (root) =>
-        chainFindRootOnChain(chain.contract, provider, root),
+      findRootOnChain: (root) => chainFindRootOnChain(chain.contract, root),
+      findRootBlock: (root) =>
+        chainFindRootBlock(chain.contract, provider, root),
       submitRoot: (root, size, batchId) =>
         chainSubmitRoot(chain.contract, provider, root, size, batchId, {
           retries: config.txRetries,
@@ -499,10 +613,13 @@ export function createCycleDeps(
       markConfirmed: (batchId, block) => dbMarkConfirmed(pool, batchId, block),
       markFailed: (batchId, errorMessage) =>
         dbMarkFailed(pool, batchId, errorMessage),
+      batchExists: (batchId) => dbBatchExists(pool, batchId),
     },
     alerts: {
       recordSignatureMismatch: (recordId, details) =>
         dbRecordSignatureMismatch(pool, recordId, details),
+      recordDuplicateRoot: (batchId, root, details) =>
+        dbRecordDuplicateRoot(pool, batchId, root, details),
     },
   };
 }

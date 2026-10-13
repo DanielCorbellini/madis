@@ -5,7 +5,8 @@ export type CycleStatus =
   | "submitted"
   | "failed"
   | "nothing-to-anchor"
-  | "aborted";
+  | "aborted"
+  | "duplicate-skipped";
 
 export interface CycleSummary {
   cycle: number;

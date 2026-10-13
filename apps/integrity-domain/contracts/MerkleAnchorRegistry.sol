@@ -23,13 +23,15 @@ contract MerkleAnchorRegistry is Ownable {
     }
 
     bytes32[] private merkleRoots;
-    mapping(bytes32 => uint256) private rootToIndexPlusOne;
+    // Stores `batchId + 1` so that batch id 0 stays distinguishable from "root not stored".
+    mapping(bytes32 => uint256) private rootToBatchIdPlusOne;
     mapping(uint256 => BatchInfo) private batchInfo;
 
     event RootAdded(
         uint256 indexed index,
         bytes32 indexed root,
-        uint256 batchSize
+        uint256 batchSize,
+        uint256 batchId
     );
 
     /**
@@ -50,17 +52,17 @@ contract MerkleAnchorRegistry is Ownable {
     ) external onlyOwner returns (uint256) {
         if (_root == bytes32(0)) revert ZeroRoot();
         if (_batchSize == 0) revert ZeroBatchSize();
-        if (rootToIndexPlusOne[_root] != 0) revert RootAlreadyExists(_root);
+        if (rootToBatchIdPlusOne[_root] != 0) revert RootAlreadyExists(_root);
         if (batchInfo[_batchId].root != bytes32(0)) {
             revert RootAlreadyExists(batchInfo[_batchId].root);
         }
 
         uint256 index = merkleRoots.length;
         merkleRoots.push(_root);
-        rootToIndexPlusOne[_root] = index + 1;
+        rootToBatchIdPlusOne[_root] = _batchId + 1;
         batchInfo[_batchId] = BatchInfo({ root: _root, size: _batchSize });
 
-        emit RootAdded(index, _root, _batchSize);
+        emit RootAdded(index, _root, _batchSize, _batchId);
 
         return index;
     }
@@ -69,7 +71,7 @@ contract MerkleAnchorRegistry is Ownable {
      * @dev Checks if a Merkle Root exists in the on-chain history O(1).
      */
     function containsMerkleRoot(bytes32 _root) public view returns (bool) {
-        return rootToIndexPlusOne[_root] != 0;
+        return rootToBatchIdPlusOne[_root] != 0;
     }
 
     /**
@@ -84,13 +86,13 @@ contract MerkleAnchorRegistry is Ownable {
     }
 
     /**
-     * @dev Returns the positional index of a Merkle Root in history.
+     * @dev Returns the batch id a Merkle Root was anchored under.
      */
-    function getMerkleRootIndex(bytes32 _root) external view returns (uint256) {
-        uint256 indexPlusOne = rootToIndexPlusOne[_root];
-        if (indexPlusOne == 0) revert RootDoesNotExist(_root);
+    function getBatchIdByRoot(bytes32 _root) external view returns (uint256) {
+        uint256 batchIdPlusOne = rootToBatchIdPlusOne[_root];
+        if (batchIdPlusOne == 0) revert RootDoesNotExist(_root);
 
-        return indexPlusOne - 1;
+        return batchIdPlusOne - 1;
     }
 
     /**
@@ -138,6 +140,31 @@ contract MerkleAnchorRegistry is Ownable {
 
         for (uint256 i = 0; i < size; i++) {
             result[i] = merkleRoots[_offset + i];
+        }
+
+        return result;
+    }
+
+    /**
+     * @dev Returns a paginated slice of anchored batch ids, in anchoring order
+     * (the same order as `getMerkleRootsPaged`). Returns an empty array if offset
+     * is out of bounds or if no roots are stored.
+     */
+    function getBatchIdsPaged(
+        uint256 _offset,
+        uint256 _limit
+    ) external view returns (uint256[] memory) {
+        uint256 total = merkleRoots.length;
+        if (total == 0 || _offset >= total) {
+            return new uint256[](0);
+        }
+
+        uint256 remaining = total - _offset;
+        uint256 size = _limit < remaining ? _limit : remaining;
+        uint256[] memory result = new uint256[](size);
+
+        for (uint256 i = 0; i < size; i++) {
+            result[i] = rootToBatchIdPlusOne[merkleRoots[_offset + i]] - 1;
         }
 
         return result;

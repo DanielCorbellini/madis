@@ -16,7 +16,31 @@ SET
 WHERE
     id = [record id];
 
--- --- Scenario 3: delete an already-anchored record ---
+UPDATE records
+SET
+    client_address = '[0x + 40 hex chars]'
+WHERE
+    id = [record id];
+
+-- Forge version / replaces (replaces: pick any other existing record id)
+UPDATE records
+SET
+    version = [version]
+WHERE
+    id = [record id];
+
+UPDATE records
+SET
+    replaces = [other record id]
+WHERE
+    id = [record id];
+
+-- --- Scenario 3: delete an already-anchored record (pin first: the
+-- --- anchor_records FK to records is RESTRICT) ---
+DELETE FROM anchor_records
+WHERE
+    record_id = [record id];
+
 DELETE FROM records
 WHERE
     id = [record id];

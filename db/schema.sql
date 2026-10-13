@@ -119,7 +119,7 @@ CREATE INDEX "idx_anchor_records_batch" ON "anchor_records" ("batch_id");
 -- 4. integrity_alerts — Incident log
 --
 --    Immutable log of anomalies detected by the anchoring and monitoring jobs.
---    alert_type: 'signature_mismatch' | 'root_divergence' | 'record_tampered'
+--    alert_type: 'signature_mismatch' | 'root_divergence' | 'record_tampered' | 'duplicate_root'
 --    source:     'anchor' | 'monitor'
 -- -----------------------------------------------------------------------------
 CREATE TABLE "integrity_alerts" (
