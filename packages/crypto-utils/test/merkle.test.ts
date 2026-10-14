@@ -3,6 +3,7 @@ import { AbiCoder, isHexString, keccak256, toUtf8Bytes } from "ethers";
 import { beforeEach, describe, it } from "node:test";
 import {
   buildMerkleTree,
+  computeMerkleRoot,
   getLeafHash,
   verifyMerkleProof,
 } from "../src/merkle.ts";
@@ -132,5 +133,40 @@ describe("merkle tree operations", () => {
         "0x" + "b".repeat(64),
       ),
     ).to.be.false;
+  });
+});
+
+describe("computeMerkleRoot", () => {
+  it("matches the root buildMerkleTree computes for the same leaves", () => {
+    const leaves = createMockLeaves(5);
+    const built = buildMerkleTree(leaves);
+
+    expect(computeMerkleRoot(leaves)).to.equal(built.root);
+  });
+
+  it("produces the same root regardless of input order", () => {
+    const leaves = createMockLeaves(4);
+    const reversed = [...leaves].reverse();
+
+    expect(computeMerkleRoot(leaves)).to.equal(computeMerkleRoot(reversed));
+  });
+
+  it("throws on an empty leaves array", () => {
+    expect(() => computeMerkleRoot([])).to.throw(
+      "Cannot compute a Merkle root from empty leaves array",
+    );
+  });
+
+  it("throws on an invalid 32-byte hex leaf", () => {
+    expect(() => computeMerkleRoot(["0x1234"])).to.throw(
+      "Invalid 32-byte hex leaf at index 0",
+    );
+  });
+
+  it("handles a single leaf", () => {
+    const leaves = createMockLeaves(1);
+    const built = buildMerkleTree(leaves);
+
+    expect(computeMerkleRoot(leaves)).to.equal(built.root);
   });
 });

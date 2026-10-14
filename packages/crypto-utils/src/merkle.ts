@@ -64,3 +64,23 @@ export function verifyMerkleProof(
     return false;
   }
 }
+
+/**
+ * Computes a Merkle tree's root without computing any leaf's proof —
+ * cheaper than buildMerkleTree when only the root is needed (e.g.
+ * comparing a recomputed root against an on-chain one).
+ */
+export function computeMerkleRoot(leaves: string[]): string {
+  if (!Array.isArray(leaves) || leaves.length === 0) {
+    throw new Error("Cannot compute a Merkle root from empty leaves array");
+  }
+
+  const values = leaves.map((leaf, i) => {
+    if (!isHexString(leaf, 32)) {
+      throw new Error(`Invalid 32-byte hex leaf at index ${i}: ${leaf}`);
+    }
+    return [leaf];
+  });
+
+  return StandardMerkleTree.of(values, ["bytes32"]).root;
+}
