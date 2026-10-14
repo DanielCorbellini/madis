@@ -27,6 +27,7 @@ import {
 } from "./chain-confirm.ts";
 import {
   resendTransaction as chainResendTransaction,
+  StuckTransactionNotFoundError,
   submitRoot as chainSubmitRoot,
   type SubmitResult,
 } from "./chain-submit.ts";
@@ -420,18 +421,98 @@ async function reconcileSubmitted(
         return;
       }
 
-      const tx = await deps.resendTransaction(
-        batch.merkleRoot,
-        batch.size,
-        batch.id,
+      await resendStuckBatch(
+        deps,
+        logger,
+        batch,
         batch.transactionHash,
+        summary,
       );
-
-      await deps.markSubmitted(batch.id, tx.hash);
-      summary.resent++;
       return;
     }
   }
+}
+
+/**
+ * Gets a `submitted` batch whose transaction has no receipt moving again. The
+ * root was already verified against the batch's pins, so this only decides how
+ * to send it: as a same-nonce replacement of the stuck transaction, or — when
+ * the node no longer knows that transaction (dropped from the mempool) and
+ * there is no nonce to replace — as a fresh one. A root that landed after all
+ * makes the fresh submit report `RootAlreadyExists`, which is settled like any
+ * other already-on-chain root.
+ *
+ * Nothing thrown here may stop the cycle: one batch that can't be re-sent right
+ * now (fee cap, RPC error, underpriced replacement) stays `submitted`, is
+ * logged at error level, and is retried by the next Phase 0.
+ */
+async function resendStuckBatch(
+  deps: ReconcileDeps,
+  logger: Logger,
+  batch: Batch,
+  oldTxHash: string,
+  summary: ReconcileSummary,
+): Promise<void> {
+  try {
+    const tx = await deps.resendTransaction(
+      batch.merkleRoot,
+      batch.size,
+      batch.id,
+      oldTxHash,
+    );
+
+    await deps.markSubmitted(batch.id, tx.hash);
+    summary.resent++;
+  } catch (error) {
+    if (error instanceof StuckTransactionNotFoundError) {
+      logger.warn(
+        { batchId: batch.id, txHash: oldTxHash },
+        "stuck transaction is no longer known to the node — resubmitting the batch as a new transaction",
+      );
+      await resubmitAsNew(deps, logger, batch, summary);
+      return;
+    }
+
+    logStuckBatchFailure(logger, batch, error);
+  }
+}
+
+async function resubmitAsNew(
+  deps: ReconcileDeps,
+  logger: Logger,
+  batch: Batch,
+  summary: ReconcileSummary,
+): Promise<void> {
+  try {
+    const result = await deps.submitRoot(
+      batch.merkleRoot,
+      batch.size,
+      batch.id,
+    );
+
+    if (result.status === "already-on-chain") {
+      await settleAlreadyOnChain(deps, batch, logger, summary);
+      return;
+    }
+
+    await deps.markSubmitted(batch.id, result.tx.hash);
+    summary.resent++;
+  } catch (error) {
+    logStuckBatchFailure(logger, batch, error);
+  }
+}
+
+function logStuckBatchFailure(
+  logger: Logger,
+  batch: Batch,
+  error: unknown,
+): void {
+  const message = error instanceof Error ? error.message : String(error);
+
+  logger.error(
+    { batchId: batch.id, err: message },
+    `batch ${batch.id}: could not re-send its stuck transaction — it stays 'submitted' and Phase 0 will retry next cycle`,
+  );
 }
 
 async function rebuildTreeRoot(

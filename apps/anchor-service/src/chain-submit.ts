@@ -20,6 +20,20 @@ export class PoisonBatchError extends Error {
   }
 }
 
+/**
+ * The transaction being replaced is no longer known to the node (evicted from
+ * the mempool, or never propagated), so there is no nonce to replace. Callers
+ * can resubmit the batch as a fresh transaction instead.
+ */
+export class StuckTransactionNotFoundError extends Error {
+  constructor(oldTxHash: string) {
+    super(
+      `stuck transaction ${oldTxHash} was not found — cannot determine its nonce to replace it`,
+    );
+    this.name = "StuckTransactionNotFoundError";
+  }
+}
+
 class AlreadyOnChainSignal extends Error {}
 
 export type SubmitResult =
@@ -151,9 +165,7 @@ export async function resendTransaction(
   const oldTx = await provider.getTransaction(oldTxHash);
 
   if (!oldTx) {
-    throw new Error(
-      `stuck transaction ${oldTxHash} was not found — cannot determine its nonce to replace it`,
-    );
+    throw new StuckTransactionNotFoundError(oldTxHash);
   }
 
   const bumped = computeBumpedFees(
