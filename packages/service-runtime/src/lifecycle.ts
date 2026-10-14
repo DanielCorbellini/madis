@@ -38,14 +38,17 @@ export async function shutdownGracefully(deps: ShutdownDeps): Promise<void> {
     );
 
     let timedOut = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<void>((resolve) => {
-      setTimeout(() => {
+      graceTimer = setTimeout(() => {
         timedOut = true;
         resolve();
       }, deps.shutdownGraceMs);
     });
 
     await Promise.race([currentCycle, timeout]);
+
+    clearTimeout(graceTimer);
 
     if (timedOut) {
       deps.logger.error(
