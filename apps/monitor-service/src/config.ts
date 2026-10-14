@@ -2,6 +2,8 @@ import { resolveContractAddress } from "contracts-shared";
 import "dotenv/config";
 import { integerEnv, requiredEnv } from "service-runtime";
 
+export const DEFAULT_ROOT_REBUILD_MAX_SIZE = 100_000;
+
 export interface MonitorConfig {
   databaseUrl: string;
   rpcUrl: string;
@@ -10,6 +12,7 @@ export interface MonitorConfig {
   cronSchedule: string;
   rpcRetries: number;
   submittedStaleMs: number;
+  rootRebuildMaxSize: number;
   shutdownGraceMs: number;
   logLevel: string;
 }
@@ -55,6 +58,16 @@ export function loadConfig(
       {
         min: 0,
       },
+    ),
+    // Largest batch whose root is rebuilt in memory. `anchor-service` never
+    // builds a batch bigger than ANCHOR_MAX_BATCH_SIZE (and needs at least as
+    // much memory to build it), so that cap is safe here too; with no cap set,
+    // fall back to a bounded default.
+    rootRebuildMaxSize: integerEnv(
+      env,
+      "ANCHOR_MAX_BATCH_SIZE",
+      DEFAULT_ROOT_REBUILD_MAX_SIZE,
+      { min: 1 },
     ),
     shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 30_000, { min: 0 }),
     logLevel: env.LOG_LEVEL || "info",

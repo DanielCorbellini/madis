@@ -12,12 +12,19 @@ import {
   recordTampered as dbRecordTampered,
 } from "./alerts.ts";
 import { checkAnchorCount } from "./anchor-count.ts";
+import { DEFAULT_ROOT_REBUILD_MAX_SIZE } from "./config.ts";
 import {
   computeRecordLeaf,
   verifyAnchoredRecord,
 } from "./record-verification.ts";
 
 export interface AuditDeps {
+  /**
+   * Largest on-chain batch size whose root is rebuilt in memory (O(n) memory);
+   * bigger batches are verified record by record, streaming in constant
+   * memory. Defaults to `DEFAULT_ROOT_REBUILD_MAX_SIZE`.
+   */
+  rootRebuildMaxSize?: number;
   chain: {
     getBatchInfo(batchId: number): Promise<{ root: string; size: number }>;
   };
@@ -74,7 +81,16 @@ export async function auditBatch(
     await deps.alerts.recordRootDivergence(batchId, root, message);
   }
 
-  if (anchorCountCheck.complete) {
+  const rebuildLimit = deps.rootRebuildMaxSize ?? DEFAULT_ROOT_REBUILD_MAX_SIZE;
+
+  if (anchorCountCheck.complete && size > rebuildLimit) {
+    logger.debug(
+      { batchId, size, rebuildLimit },
+      "batch is larger than the root-rebuild limit, verifying record by record",
+    );
+  }
+
+  if (anchorCountCheck.complete && size <= rebuildLimit) {
     const fastPath = await tryFastPath(deps, batchId, root, logger);
 
     if (fastPath) {
@@ -144,7 +160,7 @@ async function tryFastPath(
       leaves.push(computeRecordLeaf(record));
     }
 
-    logger.info({ batchId }, "building merkle root");
+    logger.debug({ batchId }, "rebuilding merkle root");
 
     if (computeMerkleRoot(leaves) !== onChainRoot) {
       return null;
@@ -165,8 +181,10 @@ async function tryFastPath(
 export function createAuditDeps(
   contract: Pick<MerkleAnchorRegistryLike, "getBatchInfo">,
   pool: Pool,
+  options: { rootRebuildMaxSize?: number } = {},
 ): AuditDeps {
   return {
+    rootRebuildMaxSize: options.rootRebuildMaxSize,
     chain: {
       getBatchInfo: (batchId) => contract.getBatchInfo(batchId),
     },
