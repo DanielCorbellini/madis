@@ -93,9 +93,8 @@ export async function listAnchoredBatches(
   options: { retries: number; pageSize?: number },
 ): Promise<AnchoredBatch[]> {
   const pageSize = options.pageSize ?? BATCH_PAGE_SIZE;
-  const batches: AnchoredBatch[] = [];
 
-  for (let offset = 0; ; offset += pageSize) {
+  async function listFrom(offset: number): Promise<AnchoredBatch[]> {
     const [batchIds, roots] = await retryTransient(
       () =>
         Promise.all([
@@ -111,12 +110,15 @@ export async function listAnchoredBatches(
       );
     }
 
-    batches.push(
-      ...batchIds.map((batchId, i) => ({ batchId, root: roots[i] })),
-    );
+    const page = batchIds.map((batchId, i) => ({ batchId, root: roots[i] }));
 
-    if (batchIds.length < pageSize) {
-      return batches;
+    // A short page is the last one; a full page may be followed by more.
+    if (page.length < pageSize) {
+      return page;
     }
+
+    return [...page, ...(await listFrom(offset + pageSize))];
   }
+
+  return listFrom(0);
 }

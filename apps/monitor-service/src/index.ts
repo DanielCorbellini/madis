@@ -47,7 +47,9 @@ export async function main() {
   const retryingContract = createRetryingContract(chain.contract, {
     retries: config.rpcRetries,
   });
-  const auditDeps = createAuditDeps(retryingContract, pool);
+  const auditDeps = createAuditDeps(retryingContract, pool, {
+    rootRebuildMaxSize: config.rootRebuildMaxSize,
+  });
   const deps = createCycleDeps(auditDeps, retryingContract, pool, logger, {
     submittedStaleMs: config.submittedStaleMs,
     listAnchoredBatches: () =>
