@@ -66,18 +66,20 @@ The system operates through two main, complementary flows:
 
 1. The client signs the business data with their private key (ECDSA) and submits the package to the API ([`apps/data-domain`](../../apps/data-domain)).
 2. The API cryptographically validates the signature and the signer's permission, persisting the record in the `records` table.
-3. Periodically, the **Anchor Service** ([`apps/anchor-service`](../../apps/anchor-service)) scans for records that have not yet been anchored, re-validates every signature, computes the leaves, and builds the Merkle Tree.
-4. If any record's signature is found to be inconsistent, the Anchor emits a `signature_mismatch` alert in the `integrity_alerts` table and excludes the record from the batch.
-5. The resulting Merkle Root is sent to the [`MerkleAnchorRegistry.sol`](../../apps/integrity-domain/contracts/MerkleAnchorRegistry.sol) smart contract via a write transaction signed by the Anchor's wallet.
-6. Once the block is confirmed on the blockchain, the batch's status in `batches` is updated to `confirmed`, and each record's individual proof (_Merkle Proof_) is saved in `anchor_records`.
+3. Periodically, the **Anchor Service** ([`apps/anchor-service`](../../apps/anchor-service)) scans for records that have not yet been anchored, re-validates every one of them (the signature over the record's full signable content, and the signer's presence in the whitelist), computes the leaves, and builds the Merkle Tree.
+4. If any record fails that re-validation, the Anchor emits a `signature_mismatch` alert in the `integrity_alerts` table and excludes the record from the batch.
+5. If the resulting Merkle Root already exists on the blockchain (the same records looking "un-anchored" again after someone deleted their pins or their batch), the Anchor persists nothing and emits a `duplicate_root` alert instead of creating a phantom batch.
+6. Otherwise, the batch (status `pending`) and each record's individual proof (_Merkle Proof_) are persisted in `batches` / `anchor_records` in one transaction, and only then is the Merkle Root sent to the [`MerkleAnchorRegistry.sol`](../../apps/integrity-domain/contracts/MerkleAnchorRegistry.sol) smart contract via a write transaction signed by the Anchor's wallet.
+7. Once the block is confirmed on the blockchain, the batch's status in `batches` is updated to `confirmed`. A batch left in flight by a crash or a slow chain is reconciled at the start of the next cycle.
 
 ### Flow 2: Continuous Auditing and Fraud Detection
 
 1. The **Monitor Service** ([`apps/monitor-service`](../../apps/monitor-service)) runs cyclically, independently of the Anchor.
-2. For each already-confirmed batch, the Monitor retrieves the original data from the relational database and recomputes the leaves and the Merkle Root using the same cryptographic logic.
-3. The Monitor performs a gas-free read query (`eth_call`) against the smart contract's `containsMerkleRoot` method.
-4. If the locally recomputed root **does not exist** on the blockchain, it is concluded that at least one record in the batch was tampered with after anchoring. The Monitor emits a `root_divergence` alert and triggers the **Drill-Down** procedure.
+2. The Monitor reads the list of every batch the contract has accepted (batch id and root, straight from the contract's stored state) and compares it with what Postgres says about the same ids. A batch the chain accepted but Postgres lost track of (row deleted, or status changed to one that cannot be true) raises a `root_divergence` alert.
+3. For each batch it audits (every `confirmed` row plus every on-chain batch that still has a row, whatever status that row claims), the Monitor takes the batch's root and size from the chain (`getBatchInfo`) — never from Postgres — and checks that the number of records pinned in `anchor_records` equals the on-chain size. It then retrieves the original data from the relational database, recomputes every leaf with the same cryptographic logic, rebuilds the Merkle Root and compares it with the on-chain root (batches above a configurable size are verified record by record instead, streaming, to bound memory).
+4. A count mismatch emits a `root_divergence` alert for the batch. If the rebuilt root does not match the on-chain root, at least one record was tampered with after anchoring, and the Monitor triggers the **Drill-Down** procedure.
 5. In the Drill-Down, the Monitor uses each record's individual `merkle_proof` saved in `anchor_records` to test each record in isolation against the legitimate root on the blockchain, emitting `record_tampered` alerts and pinpointing exactly which record was violated.
+6. Finally, it checks that every batch Postgres claims is still `submitted` actually lands on-chain within a configurable time, using its own clock, to expose forged padding rows.
 
 ---
 
@@ -132,12 +134,12 @@ Uniquely links (`UNIQUE(record_id)`) each record to the batch that anchored it.
 Immutable log for persisting detected divergences and fraud.
 
 - `id` (`BIGSERIAL PK`): Alert identifier.
-- `alert_type` (`VARCHAR(30) NOT NULL`): Incident type: `'signature_mismatch'` | `'root_divergence'` | `'record_tampered'`.
+- `alert_type` (`VARCHAR(30) NOT NULL`): Incident type: `'signature_mismatch'` | `'root_divergence'` | `'record_tampered'` | `'duplicate_root'`.
 - `source` (`VARCHAR(20) NOT NULL`): Detection source: `'anchor'` | `'monitor'`.
 - `batch_id` (`BIGINT NULL FK -> batches.id`): Affected batch (if applicable).
 - `record_id` (`BIGINT NULL FK -> records.id`): Identified tampered record (in the case of _drill-down_).
-- `expected_root` (`TEXT NULL`): Legitimate root registered on the blockchain.
-- `actual_root` (`TEXT NULL`): Spurious root recomputed locally.
+- `expected_root` (`TEXT NULL`): Legitimate root registered on the blockchain (or, for an anchor-side `root_divergence`, the root stored for the batch).
+- `actual_root` (`TEXT NULL`): The root that disagrees with it: the root rebuilt locally, or, for `duplicate_root`, the root that already exists on-chain.
 - `details` (`TEXT NULL`): Additional technical context about the occurrence.
 - `detected_at` (`TIMESTAMPTZ NOT NULL DEFAULT NOW()`): Detection timestamp.
 
@@ -182,24 +184,25 @@ Tree construction follows the OpenZeppelin ecosystem's standard specification (`
 
 ### 6.1. Anchoring Daemon (`apps/anchor-service`)
 
-Batch process executed periodically (e.g. every 1 to 3 hours):
+Batch process executed periodically (e.g. every 1 to 3 hours). Each cycle (full detail in [`ANCHOR_SERVICE_EXECUTION_CYCLE.md`](ANCHOR_SERVICE_EXECUTION_CYCLE.md)):
 
-1. **Scan:** Fetches records in `records` that do not yet have an associated entry in `anchor_records`.
-2. **Prior Validation:** Checks whether the digital signature matches the signer and the data. If invalid, emits a `signature_mismatch` alert and discards the record from the batch.
-3. **Tree Construction:** Generates the leaves $L_i$, computes the Merkle Root, and extracts the `merkle_proof` for each leaf.
-4. **On-Chain Transaction:** Invokes `MerkleAnchorRegistry.addMerkleRoot(root, batchSize)` on the decentralized network.
-5. **Batch Persistence:** Inserts the batch's records into the `batches` table and persists the individual proofs in `anchor_records`.
+1. **Reconciliation:** Resolves batches a previous cycle left in flight (`pending`, `submitted`, `failed`) before any new work.
+2. **Scan:** Fetches records in `records` that do not yet have an associated entry in `anchor_records`.
+3. **Prior Validation:** Checks that the digital signature (over the record's full signable content) matches the signer and that the signer is whitelisted. If not, emits a `signature_mismatch` alert and discards the record from the batch.
+4. **Tree Construction:** Generates the leaves $L_i$, computes the Merkle Root, and extracts the `merkle_proof` for each leaf.
+5. **Duplicate-Root Guard:** If the root already exists on-chain, persists nothing and emits a `duplicate_root` alert.
+6. **Batch Persistence:** In one transaction, inserts the batch (status `pending`) into `batches` and persists the individual proofs in `anchor_records`.
+7. **On-Chain Transaction:** Invokes `MerkleAnchorRegistry.addMerkleRoot(root, size, batchId)` on the decentralized network and waits for confirmation, after which the batch becomes `confirmed`.
 
 ### 6.2. Integrity Monitor (`apps/monitor-service`)
 
-Continuous audit process executed at high frequency (e.g. every 5 to 15 minutes):
+Continuous audit process executed at high frequency (e.g. every 5 to 15 minutes). Each cycle (full detail in [`MONITOR_SERVICE_EXECUTION_CYCLE.md`](MONITOR_SERVICE_EXECUTION_CYCLE.md)):
 
-1. **Retrieval:** Selects confirmed batches from the `batches` table.
-2. **Independent Reconstruction:** Retrieves the raw records in `records` and rebuilds the Merkle Root from the database's data.
-3. **On-Chain Integrity Check:** Performs a zero-gas-cost `eth_call` against the `containsMerkleRoot(reconstructedRoot)` method.
-4. **Inconsistency Handling:** If the root diverges from the blockchain:
-   - Emits a `root_divergence` alert for the batch in `integrity_alerts`.
-   - Executes the individual **Drill-Down** procedure.
+1. **Chain-Driven Retrieval:** Lists every batch the contract has accepted (`getBatchIdsPaged` / `getMerkleRootsPaged`) and asks Postgres about those same ids. Batches Postgres lost track of (or labels with an impossible status) raise a `root_divergence` alert; the audit set is every `confirmed` row plus every on-chain batch that has a row, so changing a `status` cannot hide a batch.
+2. **Ground Truth From the Chain:** For each batch, reads the root and size from `getBatchInfo` and compares the size with the number of pinned records in `anchor_records`.
+3. **Independent Reconstruction:** Retrieves the raw records in `records` and rebuilds the Merkle Root from the database's data (for batches above `ANCHOR_MAX_BATCH_SIZE`, verifies each record's stored proof instead).
+4. **Inconsistency Handling:** If the rebuilt root diverges from the blockchain's, executes the individual **Drill-Down** procedure, emitting `record_tampered` for each violated record.
+5. **Staleness Check:** Flags `submitted` batches that never land on-chain within `MONITOR_SUBMITTED_STALE_MS`.
 
 ---
 
@@ -209,17 +212,18 @@ When a divergence is detected at the batch level, the Monitor doesn't just flag 
 
 ```text
 [Divergent Batch Detected]
+  (rebuilt root ≠ on-chain root, or the batch is too large to rebuild)
          │
          ▼
-[1. Emits Alert: root_divergence (batch_id)]
-         │
-         ▼
-[2. Runs Drill-Down record by record]
-   For each record in the batch:
+[1. Runs Drill-Down record by record]
+   For each record pinned to the batch:
      a. Recomputes leaf Li from the current data in records
      b. Retrieves the merkle_proof saved in anchor_records
      c. Validates: verifyMerkleProof(merkle_proof, blockchainRoot, Li)
      d. If it FAILS ──> [Emits Alert: record_tampered (batch_id, record_id)]
+
+(A pin count different from the on-chain size is reported separately,
+ as root_divergence (batch_id), before this procedure.)
 ```
 
 ### Adversarial Security Property of the Drill-Down:
@@ -234,10 +238,13 @@ The smart contract acts as the system's public integrity anchor. It is developed
 
 ### Main Methods:
 
-- `addMerkleRoot(bytes32 _root, uint256 _batchSize) external onlyOwner returns (uint256)`: Registers a new Merkle Root and emits the `RootAdded` event. Guarantees uniqueness and prevents registering null roots.
+- `addMerkleRoot(bytes32 _root, uint256 _batchSize, uint256 _batchId) external onlyOwner returns (uint256)`: Registers a new Merkle Root under a batch id and emits `RootAdded(index, root, batchSize, batchId)`. Guarantees that a root can be registered only once and a batch id used only once, and prevents null roots and empty batches.
 - `containsMerkleRoot(bytes32 _root) public view returns (bool)`: $O(1)$ existence check with no gas cost.
 - `getMerkleRootAt(uint256 _index) external view returns (bytes32)`: Historical lookup by sequential index.
+- `getBatchInfo(uint256 _batchId) external view returns (bytes32 root, uint256 size)`: The root and size anchored under a batch id — the ground truth the Monitor audits each batch against.
+- `getBatchIdByRoot(bytes32 _root) external view returns (uint256)`: Reverse lookup — which batch id a root was registered under (reverts if it was never registered).
 - `getLatestMerkleRoot() external view returns (bytes32)`: Returns the most recently registered root.
 - `getRootCount() external view returns (uint256)`: Returns the total number of anchored batches.
 - `getMerkleRootsPaged(uint256 _offset, uint256 _limit) external view returns (bytes32[] memory)`: Enables efficient pagination of the root history for off-chain synchronization.
+- `getBatchIdsPaged(uint256 _offset, uint256 _limit) external view returns (uint256[] memory)`: The matching batch ids, in the same order, so the Monitor can enumerate every anchored batch from the contract's stored state without scanning event logs.
 - `verifyMerkleProof(bytes32 _root, bytes32[] calldata _proof, bytes32 _leaf) external view returns (bool)`: Validates a cryptographic proof directly against a root registered on the contract.

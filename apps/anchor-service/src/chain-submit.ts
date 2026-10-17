@@ -73,7 +73,7 @@ export function computeBumpedFees(
 }
 
 /**
- * Sends `addMerkleRoot(root, size)`, retrying failures (network,
+ * Sends `addMerkleRoot(root, size, batchId)`, retrying failures (network,
  * timeout, RPC unreachable/rate-limited).
  *
  * In the first call, the gas fee is not bumped. Every retry, regardless
@@ -82,9 +82,10 @@ export function computeBumpedFees(
  *
  * A decoded contract revert is deterministic: retrying with the same
  * root/size would fail identically, so those abort immediately instead of
- * retrying. `RootAlreadyExists` resolves as success, `OwnableUnauthorizedAccount`
- * throws `PoisonBatchError`, any other named revert throws as a plain
- * non-retryable failure.
+ * retrying. `RootAlreadyExists` resolves as `already-on-chain` (the caller
+ * decides, by who owns the root, whether that means its own batch is done),
+ * `OwnableUnauthorizedAccount` throws `PoisonBatchError`, any other named
+ * revert throws as a plain non-retryable failure.
  */
 export async function submitRoot(
   contract: Pick<MerkleAnchorRegistryLike, "addMerkleRoot">,

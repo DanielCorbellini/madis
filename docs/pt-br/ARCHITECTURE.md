@@ -66,18 +66,20 @@ O sistema opera por meio de dois fluxos principais e complementares:
 
 1. O cliente assina os dados de negócio com sua chave privada (ECDSA) e submete o pacote à API ([`apps/data-domain`](../../apps/data-domain)).
 2. A API valida criptograficamente a assinatura e a permissão do signatário, persistindo o registro na tabela `records`.
-3. Periodicamente, o **Anchor Service** ([`apps/anchor-service`](../../apps/anchor-service)) varre registros ainda não ancorados, valida novamente cada assinatura, computa as folhas e constrói a Árvore de Merkle.
-4. Caso haja inconsistência na assinatura de algum registro, o Anchor emite um alerta do tipo `signature_mismatch` na tabela `integrity_alerts` e exclui o registro do lote.
-5. A Raiz de Merkle resultante é enviada ao contrato inteligente [`MerkleAnchorRegistry.sol`](../../apps/integrity-domain/contracts/MerkleAnchorRegistry.sol) via transação de escrita assinada pela carteira do Anchor.
-6. Após confirmação do bloco na blockchain, o lote em `batches` tem seu status atualizado para `confirmed`, e as provas individuais (_Merkle Proofs_) de cada registro são salvas em `anchor_records`.
+3. Periodicamente, o **Anchor Service** ([`apps/anchor-service`](../../apps/anchor-service)) varre registros ainda não ancorados, revalida cada um deles (a assinatura sobre todo o conteúdo assinável do registro e a presença do signatário na whitelist), computa as folhas e constrói a Árvore de Merkle.
+4. Caso algum registro falhe nessa revalidação, o Anchor emite um alerta do tipo `signature_mismatch` na tabela `integrity_alerts` e exclui o registro do lote.
+5. Se a Raiz de Merkle resultante já existir na blockchain (os mesmos registros parecendo "não ancorados" de novo depois que alguém deletou seus vínculos ou seu lote), o Anchor não persiste nada e emite um alerta `duplicate_root`, em vez de criar um lote fantasma.
+6. Caso contrário, o lote (status `pending`) e a prova individual (_Merkle Proof_) de cada registro são persistidos em `batches` / `anchor_records` em uma única transação, e só então a Raiz de Merkle é enviada ao contrato inteligente [`MerkleAnchorRegistry.sol`](../../apps/integrity-domain/contracts/MerkleAnchorRegistry.sol) via transação de escrita assinada pela carteira do Anchor.
+7. Após a confirmação do bloco na blockchain, o status do lote em `batches` é atualizado para `confirmed`. Um lote deixado em andamento por um crash ou por uma chain lenta é reconciliado no início do ciclo seguinte.
 
 ### Fluxo 2: Auditoria Contínua e Detecção de Fraudes
 
 1. O **Monitor Service** ([`apps/monitor-service`](../../apps/monitor-service)) executa ciclicamente de forma independente ao Anchor.
-2. Para cada lote já confirmado, o Monitor recupera os dados originais no banco relacional e recalcula as folhas e a Raiz de Merkle usando a mesma lógica criptográfica.
-3. O Monitor realiza uma consulta de leitura sem custo de gas (`eth_call`) ao método `containsMerkleRoot` do contrato inteligente.
-4. Se a raiz recalculada localmente **não existir** na blockchain, conclui-se que ao menos um registro do lote foi adulterado pós-ancoragem. O Monitor emite um alerta `root_divergence` e aciona o procedimento de **Drill-Down**.
+2. O Monitor lê a lista de todos os lotes que o contrato já aceitou (id do lote e raiz, direto do estado armazenado do contrato) e a compara com o que o Postgres diz sobre os mesmos ids. Um lote que a chain aceitou mas que o Postgres perdeu de vista (linha deletada, ou status alterado para um que não pode ser verdadeiro) dispara um alerta `root_divergence`.
+3. Para cada lote que audita (toda linha `confirmed` mais todo lote on-chain que ainda tenha linha, qualquer que seja o status que essa linha alegue), o Monitor obtém a raiz e o tamanho do lote na chain (`getBatchInfo`) — nunca no Postgres — e verifica se a quantidade de registros vinculados em `anchor_records` é igual ao tamanho on-chain. Em seguida, recupera os dados originais no banco relacional, recalcula cada folha com a mesma lógica criptográfica, reconstrói a Raiz de Merkle e a compara com a raiz on-chain (lotes acima de um tamanho configurável são verificados registro a registro, em _streaming_, para limitar a memória).
+4. Uma divergência de contagem emite um alerta `root_divergence` para o lote. Se a raiz reconstruída não corresponder à raiz on-chain, ao menos um registro foi adulterado pós-ancoragem, e o Monitor aciona o procedimento de **Drill-Down**.
 5. No Drill-Down, o Monitor utiliza o `merkle_proof` individual de cada registro salvo em `anchor_records` para testar cada registro isoladamente contra a raiz legítima na blockchain, emitindo alertas do tipo `record_tampered` e identificando com exatidão o registro violado.
+6. Por fim, verifica se todo lote que o Postgres afirma estar `submitted` de fato chega à chain dentro de um tempo configurável, usando seu próprio relógio, para expor linhas de preenchimento forjadas.
 
 ---
 
@@ -132,12 +134,12 @@ Vincula de forma unívoca (`UNIQUE(record_id)`) cada registro ao lote que o anco
 Log imutável para persistência de divergências e fraudes detectadas.
 
 - `id` (`BIGSERIAL PK`): Identificador do alerta.
-- `alert_type` (`VARCHAR(30) NOT NULL`): Tipo de incidente: `'signature_mismatch'` | `'root_divergence'` | `'record_tampered'`.
+- `alert_type` (`VARCHAR(30) NOT NULL`): Tipo de incidente: `'signature_mismatch'` | `'root_divergence'` | `'record_tampered'` | `'duplicate_root'`.
 - `source` (`VARCHAR(20) NOT NULL`): Origem da detecção: `'anchor'` | `'monitor'`.
 - `batch_id` (`BIGINT NULL FK -> batches.id`): Lote afetado (se aplicável).
 - `record_id` (`BIGINT NULL FK -> records.id`): Registro adulterado identificado (no caso de _drill-down_).
-- `expected_root` (`TEXT NULL`): Raiz legítima registrada na blockchain.
-- `actual_root` (`TEXT NULL`): Raiz espúria recalculada localmente.
+- `expected_root` (`TEXT NULL`): Raiz legítima registrada na blockchain (ou, para um `root_divergence` do lado do Anchor, a raiz armazenada para o lote).
+- `actual_root` (`TEXT NULL`): A raiz que diverge dela: a raiz reconstruída localmente ou, para `duplicate_root`, a raiz que já existe on-chain.
 - `details` (`TEXT NULL`): Contexto técnico complementar da ocorrência.
 - `detected_at` (`TIMESTAMPTZ NOT NULL DEFAULT NOW()`): Timestamp da detecção.
 
@@ -182,24 +184,25 @@ A construção da árvore adota a especificação padrão do ecossistema OpenZep
 
 ### 6.1. Daemon de Ancoragem (`apps/anchor-service`)
 
-Processo em lote executado periodicamente (ex: a cada 1 a 3 horas):
+Processo em lote executado periodicamente (ex: a cada 1 a 3 horas). Cada ciclo (detalhes completos em [`ANCHOR_SERVICE_EXECUTION_CYCLE.md`](ANCHOR_SERVICE_EXECUTION_CYCLE.md)):
 
-1. **Varredura:** Busca registros em `records` que ainda não possuem entrada associada em `anchor_records`.
-2. **Validação Prévia:** Verifica se a assinatura digital corresponde ao signatário e aos dados. Se inválido, emite alerta `signature_mismatch` e descarta o registro do lote.
-3. **Construção da Árvore:** Gera as folhas $L_i$, computa a Raiz de Merkle e extrai o `merkle_proof` de cada folha.
-4. **Transação On-Chain:** Invoca `MerkleAnchorRegistry.addMerkleRoot(root, batchSize)` na rede descentralizada.
-5. **Persistência do Lote:** Insere os registros do lote na tabela `batches` e persiste as provas individuais em `anchor_records`.
+1. **Reconciliação:** Resolve os lotes que um ciclo anterior deixou em andamento (`pending`, `submitted`, `failed`) antes de qualquer trabalho novo.
+2. **Varredura:** Busca registros em `records` que ainda não possuem entrada associada em `anchor_records`.
+3. **Validação Prévia:** Verifica se a assinatura digital (sobre todo o conteúdo assinável do registro) corresponde ao signatário e se o signatário está na whitelist. Se não, emite alerta `signature_mismatch` e descarta o registro do lote.
+4. **Construção da Árvore:** Gera as folhas $L_i$, computa a Raiz de Merkle e extrai o `merkle_proof` de cada folha.
+5. **Guarda de Raiz Duplicada:** Se a raiz já existe on-chain, não persiste nada e emite um alerta `duplicate_root`.
+6. **Persistência do Lote:** Em uma única transação, insere o lote (status `pending`) na tabela `batches` e persiste as provas individuais em `anchor_records`.
+7. **Transação On-Chain:** Invoca `MerkleAnchorRegistry.addMerkleRoot(root, size, batchId)` na rede descentralizada e aguarda a confirmação, após a qual o lote passa a `confirmed`.
 
 ### 6.2. Monitor de Integridade (`apps/monitor-service`)
 
-Processo de auditoria contínua executado em alta frequência (ex: a cada 5 a 15 minutos):
+Processo de auditoria contínua executado em alta frequência (ex: a cada 5 a 15 minutos). Cada ciclo (detalhes completos em [`MONITOR_SERVICE_EXECUTION_CYCLE.md`](MONITOR_SERVICE_EXECUTION_CYCLE.md)):
 
-1. **Recuperação:** Seleciona lotes confirmados na tabela `batches`.
-2. **Reconstrução Independente:** Recupera os registros brutos em `records` e reconstrói a Raiz de Merkle a partir dos dados do banco.
-3. **Checagem de Integridade On-Chain:** Executa uma chamada `eth_call` de custo zero de gas ao método `containsMerkleRoot(reconstructedRoot)`.
-4. **Tratamento de Inconsistência:** Se a raiz divergir da blockchain:
-   - Emite um alerta `root_divergence` para o lote em `integrity_alerts`.
-   - Executa o procedimento de **Drill-Down** individual.
+1. **Recuperação Guiada pela Chain:** Lista todos os lotes que o contrato já aceitou (`getBatchIdsPaged` / `getMerkleRootsPaged`) e consulta o Postgres sobre esses mesmos ids. Lotes que o Postgres perdeu de vista (ou rotula com um status impossível) disparam um alerta `root_divergence`; o conjunto auditado é toda linha `confirmed` mais todo lote on-chain que tenha linha, de modo que alterar um `status` não consegue esconder um lote.
+2. **Verdade Fundamental Vinda da Chain:** Para cada lote, lê a raiz e o tamanho via `getBatchInfo` e compara o tamanho com o número de registros vinculados em `anchor_records`.
+3. **Reconstrução Independente:** Recupera os registros brutos em `records` e reconstrói a Raiz de Merkle a partir dos dados do banco (para lotes acima de `ANCHOR_MAX_BATCH_SIZE`, verifica em vez disso a prova armazenada de cada registro).
+4. **Tratamento de Inconsistência:** Se a raiz reconstruída divergir da da blockchain, executa o procedimento de **Drill-Down** individual, emitindo `record_tampered` para cada registro violado.
+5. **Verificação de Obsolescência:** Sinaliza lotes `submitted` que nunca chegam à chain dentro de `MONITOR_SUBMITTED_STALE_MS`.
 
 ---
 
@@ -209,17 +212,18 @@ Quando uma divergência é detectada no nível do lote, o Monitor não apenas si
 
 ```text
 [Lote Divergente Detectado]
+  (raiz reconstruída ≠ raiz on-chain, ou o lote é grande demais para reconstruir)
          │
          ▼
-[1. Emite Alerta: root_divergence (batch_id)]
-         │
-         ▼
-[2. Executa Drill-Down registro a registro]
-   Para cada record no lote:
+[1. Executa Drill-Down registro a registro]
+   Para cada record vinculado ao lote:
      a. Recalcula a folha Li a partir dos dados atuais de records
      b. Recupera o merkle_proof salvo em anchor_records
      c. Valida: verifyMerkleProof(merkle_proof, blockchainRoot, Li)
      d. Se FALHAR ──> [Emite Alerta: record_tampered (batch_id, record_id)]
+
+(Uma contagem de vínculos diferente do tamanho on-chain é reportada à parte,
+ como root_divergence (batch_id), antes deste procedimento.)
 ```
 
 ### Propriedade de Segurança Adversarial do Drill-Down:
@@ -234,10 +238,13 @@ O contrato inteligente atua como a âncora pública de integridade do sistema. E
 
 ### Métodos Principais:
 
-- `addMerkleRoot(bytes32 _root, uint256 _batchSize) external onlyOwner returns (uint256)`: Registra uma nova Raiz de Merkle e emite o evento `RootAdded`. Garante unicidade e impede o registro de raízes nulas.
+- `addMerkleRoot(bytes32 _root, uint256 _batchSize, uint256 _batchId) external onlyOwner returns (uint256)`: Registra uma nova Raiz de Merkle sob um id de lote e emite `RootAdded(index, root, batchSize, batchId)`. Garante que uma raiz só possa ser registrada uma vez e um id de lote só possa ser usado uma vez, e impede raízes nulas e lotes vazios.
 - `containsMerkleRoot(bytes32 _root) public view returns (bool)`: Verificação de existência $O(1)$ sem custo de gas.
 - `getMerkleRootAt(uint256 _index) external view returns (bytes32)`: Consulta histórica por índice sequencial.
+- `getBatchInfo(uint256 _batchId) external view returns (bytes32 root, uint256 size)`: A raiz e o tamanho ancorados sob um id de lote — a verdade fundamental contra a qual o Monitor audita cada lote.
+- `getBatchIdByRoot(bytes32 _root) external view returns (uint256)`: Consulta reversa — sob qual id de lote uma raiz foi registrada (reverte se nunca foi registrada).
 - `getLatestMerkleRoot() external view returns (bytes32)`: Retorna a última raiz registrada.
 - `getRootCount() external view returns (uint256)`: Retorna a quantidade total de lotes ancorados.
 - `getMerkleRootsPaged(uint256 _offset, uint256 _limit) external view returns (bytes32[] memory)`: Permite paginação eficiente do histórico de raízes para sincronização off-chain.
+- `getBatchIdsPaged(uint256 _offset, uint256 _limit) external view returns (uint256[] memory)`: Os ids de lote correspondentes, na mesma ordem, para que o Monitor enumere todo lote ancorado a partir do estado armazenado do contrato, sem varrer logs de eventos.
 - `verifyMerkleProof(bytes32 _root, bytes32[] calldata _proof, bytes32 _leaf) external view returns (bool)`: Valida uma prova criptográfica diretamente contra uma raiz registrada no contrato.

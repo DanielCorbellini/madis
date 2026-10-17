@@ -14,7 +14,7 @@ This document is more granular than `ARCHITECTURE.md`'s §6.2 summary and reflec
 
 Before scheduling anything, the process validates its own environment and its ability to talk to both Postgres and the blockchain. Every check is fail-fast: if any of them fails, the process logs the error and exits immediately.
 
-1. **Configuration parsing** (`src/config.ts`) — every required environment variable (`DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID`) must be present and well-formed. `CONTRACT_ADDRESS` is optional and resolved the same way `anchor-service` resolves it, from `packages/contracts-shared`'s committed per-chain deployment registry.
+1. **Configuration parsing** (`src/config.ts`) — every required environment variable (`DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID`) must be present and well-formed. `CONTRACT_ADDRESS` is optional and resolved the same way `anchor-service` resolves it, from `packages/contracts-shared`'s committed per-chain deployment registry. Every optional setting (including `ANCHOR_MAX_BATCH_SIZE`, which this daemon also reads — see Phase 3) is listed in §5.
 2. **Private-key rejection.** If `ANCHOR_PRIVATE_KEY` is present in the environment at all, `loadConfig` throws immediately — the exact opposite of `anchor-service`'s own startup check. A signing key on a read-only auditor would be a real safety defect, not a harmless unused variable, so this is caught loudly before anything else runs.
 3. **Database connectivity** — a `SELECT 1` against the configured Postgres pool.
 4. **Network identity** — the connected RPC endpoint's `chainId` must match the configured `ANCHOR_CHAIN_ID`.
@@ -26,9 +26,9 @@ If any of steps 3-5 throws, the database pool and the chain provider are both cl
 
 ### 1.2. Chain Client and Retry Policy
 
-Every on-chain read this daemon makes — `getBatchInfo` (Phases 3 and 5) and `getRootCount` (Phase 1) — goes through the same retry wrapper, `createRetryingContract` (`src/chain.ts`), built once at startup around the read-only contract instance and reused for the process's entire lifetime.
+Every on-chain read this daemon makes — `getBatchInfo` (Phases 3 and 5) and `getRootCount` (Phase 1) — goes through the same retry wrapper, `createRetryingContract` (`src/chain.ts`), built once at startup around the read-only contract instance and reused for the process's entire lifetime. `listAnchoredBatches` (Phase 1: the contract's paged `getBatchIdsPaged` / `getMerkleRootsPaged` views) applies the same retry policy to each page it reads.
 
-A genuine contract revert is deterministic: retrying `RootDoesNotExist` a second time would fail identically, so any error `decodeRevertName` (`packages/contracts-shared`) can decode into a named revert aborts immediately, without retrying. Everything else — timeouts, connection resets, rate limiting — is a transient network condition and is retried via [`p-retry`](https://github.com/sindresorhus/p-retry), up to `MONITOR_RPC_RETRIES` attempts (default: 4). Unlike `anchor-service`'s equivalent retry policy, there is no fee-bumping schedule here at all — these are free reads, not paid transactions, so there is nothing to bump.
+A genuine contract revert is deterministic: retrying `RootDoesNotExist` a second time would fail identically, so any error `decodeRevertName` (`packages/contracts-shared`) can decode into a named revert aborts immediately, without retrying. Everything else — timeouts, connection resets, rate limiting — is a transient network condition and is retried via [`p-retry`](https://github.com/sindresorhus/p-retry), up to `MONITOR_RPC_RETRIES` attempts (default: 4). Unlike `anchor-service`'s equivalent retry policy, there is no fee-bumping schedule here at all — these are free reads, not paid transactions, so there is nothing to bump. A read that still fails after its retries is handled by its caller: inside Phase 1's batch listing it degrades the cycle (see Phase 1); inside the per-batch loops of Phases 3 and 5 it is logged and that batch is skipped (no alert — an unreachable RPC is not evidence of tampering); a failure of the mandatory `getRootCount` read aborts the cycle, which is logged as `cycle failed unexpectedly` and retried by the next scheduled tick.
 
 ### 1.3. Scheduling
 
@@ -54,14 +54,14 @@ Unlike `anchor-service`'s single fixed abort checkpoint (between persisting a ba
 
 ## 2. The Execution Cycle
 
-Each scheduled tick runs exactly one execution cycle, implemented by `runMonitorCycle` (`src/cycle.ts`). Unlike `anchor-service`'s single linear sequence of phases, this cycle runs three largely independent checks back to back — a whole-system count check, a full per-batch rescan, and a per-batch staleness check — aggregating all three into one structured summary at the end.
+Each scheduled tick runs exactly one execution cycle, implemented by `runMonitorCycle` (`src/cycle.ts`). Unlike `anchor-service`'s single linear sequence of phases, this cycle runs several largely independent checks back to back — the chain's own batch list together with a whole-system count check, a full audit of every batch the chain accepted (plus every row Postgres calls confirmed), and a per-batch staleness check — aggregating all of them into one structured summary at the end.
 
 ```mermaid
 flowchart TD
-    Start(["Scheduled tick (croner)"]) --> P1["Phase 1 — Root count check<br/>(whole-system tamper detection)"]
-    P1 --> P2["Phase 2 — Fetch confirmed batch ids<br/>(full rescan, no filtering)"]
-    P2 --> D1{"Confirmed batches left,<br/>and no shutdown requested?"}
-    D1 -- Yes --> P3["Phase 3 — Audit one batch<br/>(anchor count + per-record proofs)"]
+    Start(["Scheduled tick (croner)"]) --> P1["Phase 1 — Chain batch list + root count check<br/>(missing / inconsistent batches, whole-system count)"]
+    P1 --> P2["Phase 2 — Select the batches to audit<br/>(confirmed rows ∪ on-chain batches with a row)"]
+    P2 --> D1{"Batches left to audit,<br/>and no shutdown requested?"}
+    D1 -- Yes --> P3["Phase 3 — Audit one batch<br/>(anchor count + root rebuild / per-record proofs)"]
     P3 --> D1
     D1 -- No --> P4["Phase 4 — Fetch submitted batch ids<br/>+ prune stale-submitted tracker"]
     P4 --> D2{"Submitted batches left,<br/>and no shutdown requested?"}
@@ -74,15 +74,15 @@ flowchart TD
 The same six phases, as a plain-text list:
 
 ```text
-Phase 1  Root count check (contract total vs. tracked batches in Postgres)
-Phase 2  Fetch every confirmed batch id (full rescan, no filtering)
-Phase 3  Audit one confirmed batch (loops over Phase 2's ids)
+Phase 1  Chain batch list (missing / inconsistent batches) + root count check
+Phase 2  Select the batches to audit (confirmed rows plus every on-chain batch that has a row)
+Phase 3  Audit one batch (loops over Phase 2's ids)
 Phase 4  Fetch every submitted batch id + prune the stale-submitted tracker
 Phase 5  Check one submitted batch's staleness (loops over Phase 4's ids)
 Phase 6  Assemble and log the cycle summary
 ```
 
-Phases 1-2 and 4-5 never depend on each other's outcome, and none of the four checks (Phase 1's count check, Phase 3's two checks, Phase 5's staleness check) ever stops the cycle from running the rest — a single batch's failure, or even the whole-system count check failing, only ever fires an alert and continues.
+Phases 1-2 and 4-5 never depend on each other's outcome, and none of the checks (Phase 1's batch list and count check, Phase 3's checks, Phase 5's staleness check) ever stops the cycle from running the rest — a single batch's failure, or a count mismatch, only ever fires an alert and continues. The one exception is an unreadable chain: if a mandatory read (such as `getRootCount`) still fails after its retries, the cycle aborts, is logged as `cycle failed unexpectedly`, and the next scheduled tick tries again.
 
 ### Phase 1 — Root Count Check and Chain Batch List
 
@@ -109,9 +109,9 @@ This is a considered choice, not the obvious default. An earlier version of this
 
 ### Phase 3 — Audit One Batch
 
-**Responsibility:** for one already-confirmed batch, verify both that every one of its records is still present, and that none of their content has been edited since anchoring.
+**Responsibility:** for one batch from Phase 2's audit set, verify both that every one of its records is still present, and that none of their content has been edited since anchoring.
 
-Implemented by `auditBatch` (`src/audit.ts`), called once per batch id from Phase 2:
+Implemented by `auditBatch` (`src/audit.ts`), called once per batch id from Phase 2 (whatever status Postgres claims for it — the audit never trusts that column to decide *whether* a batch is checked):
 
 1. **Ground truth from the chain.** `getBatchInfo(batchId)` — never Postgres's own `batches.size`/`merkle_root` — is the only source this phase trusts for what this batch actually anchored. If this reverts `RootDoesNotExist` (a `'confirmed'` Postgres row with no matching on-chain `BatchInfo` at all), the revert propagates out of `auditBatch` uncaught; `runMonitorCycle` catches it at the loop level, fires a `root_divergence` alert (`expected_root: null`, since there is no root to report) naming that batch id, and moves on. Any other exception (a genuinely unexpected shape, a dropped connection mid-stream) is logged and the batch is skipped without an alert — it's an anomaly, not evidence of tampering, and the full rescan will pick this same batch up again next cycle regardless.
 2. **Anchor count check.** `countAnchoredRecords` (`src/audit-repository.ts`) — a plain `COUNT(*)` of this batch's current `anchor_records` rows — is compared against the on-chain `size` via `checkAnchorCount` (`src/anchor-count.ts`). Any mismatch, not only "fewer than," fires a `root_divergence` alert. This is the one gap a per-record proof loop can never notice on its own, since it only ever visits rows that are still there — a deleted `anchor_records` row is invisible to it.
@@ -134,7 +134,7 @@ Implemented by `findSubmittedBatchIds` (`src/batch-selection-repository.ts`) —
 Implemented inline in `runMonitorCycle`, backed by `createStaleSubmittedTracker` (`src/stale-submitted-tracker.ts`):
 
 1. `observeSubmittedBatch(batchId)` records the first time this *process* has ever seen this batch id as `'submitted'` (`Date.now()` — this process's own clock, never anything read from Postgres) and returns whether it has been continuously tracked, unresolved, for at least `MONITOR_SUBMITTED_STALE_MS` (default: 24 hours). If not yet stale, nothing else happens for this batch this cycle — the ordinary state for almost every submitted batch, which usually confirms within minutes.
-2. Once a batch id *is* stale, `getBatchInfo(batchId)` is called for real. If it now succeeds, the batch landed on-chain and Postgres's `status` column simply hasn't caught up yet — that's `anchor-service`'s own reconcile loop's job, not this daemon's — and nothing further happens. If it reverts `RootDoesNotExist`, that is the signal: a batch that has claimed to be on its way to being anchored for far longer than any honest confirmation or resend cycle should ever take, and that still does not exist on-chain at all. This fires a `root_divergence` alert (`expected_root: null`) naming that batch id.
+2. Once a batch id *is* stale, `getBatchInfo(batchId)` is called for real. If it now succeeds, the batch landed on-chain and Postgres's `status` column simply hasn't caught up yet — that's `anchor-service`'s own reconcile loop's job, not this daemon's — and nothing further happens here (such a batch is already in Phase 3's audit set, because the chain lists it). If it reverts `RootDoesNotExist`, that is the signal: a batch that has claimed to be on its way to being anchored for far longer than any honest confirmation or resend cycle should ever take, and that still does not exist on-chain at all. This fires a `root_divergence` alert (`expected_root: null`) naming that batch id.
 
 **Why 24 hours, and why it cannot be shorter:** `anchor-service`'s own reconcile pass runs only once per `ANCHOR_CRON_SCHEDULE` tick (default every 3 hours), and a resend does not wait for its own confirmation either — it fires and returns, so confirming a resent transaction needs another full cron interval on top. Under nothing but `anchor-service`'s own defaults, a perfectly healthy submitted batch can legitimately take 6+ hours to resolve. An earlier version of this threshold (30 minutes, sized only against a single confirmation wait) would have false-alarmed on that entirely normal delay constantly. See [`docs/superpowers/specs/2026-09-24-monitor-service-daemon-design.md`](../superpowers/specs/2026-09-24-monitor-service-daemon-design.md) §3.1 for the full reasoning.
 
@@ -157,28 +157,46 @@ Implemented inline at the end of `runMonitorCycle`, logged via `logger.info(summ
 
 ## 3. Detection Guarantees (Recap)
 
-The four checks above (Phase 1's count check; Phase 3's anchor-count check and per-record proof loop; Phase 5's staleness check) each close a gap the others cannot see on their own — none is redundant with any other:
+The checks above (Phase 1's batch list and count check; Phase 3's anchor-count check, root rebuild and per-record proof loop; Phase 5's staleness check) each close a gap the others cannot see on their own:
 
-- **Phase 3's per-record proof loop** catches an *edited* row — a record still present, still pinned to its batch, whose content no longer matches what was anchored.
-- **Phase 3's anchor count check** catches a *deleted* row — a record whose `anchor_records` pin vanished entirely, invisible to a proof loop that can only ever visit rows still there.
+- **Phase 3's root rebuild and per-record proof loop** catch an *edited* row — a record still present, still pinned to its batch, whose content no longer matches what was anchored. The rebuild notices that something in the batch changed; the proof loop is what names the specific `record_id`. A *count-preserving swap* — one record deleted and a copy of another pinned in its place, reusing the copy's stored proof — is caught the same way: a copy carries a new `id`/`entity_id`/`created_at`, so its leaf appears nowhere in the on-chain tree and is flagged (the deleted record is never named, only the pinned copy).
+- **Phase 3's anchor count check** catches a *deleted* or *extra* pin — a record whose `anchor_records` pin vanished (invisible to a proof loop that only visits rows still there), or a forged extra pin.
 - **Phase 1's chain batch list** catches a *hidden batch* — a batch the chain accepted whose Postgres row was deleted, or flipped to `'pending'`/`'failed'` — and names it by id and root, even when a padding row keeps the counts equal. Phase 2 then audits every on-chain batch that still has a row, so flipping a real batch to `'submitted'` cannot take it out of the audit either. The plain count check remains as the fallback for an anomaly no single batch explains.
 - **Phase 5's stale-submitted check** catches a *forged padding batch* — a fake `'submitted'` row inserted specifically to keep Phase 1's count balanced after hiding a real one, which Phase 1 alone cannot distinguish from a real batch still legitimately confirming.
 
-Together, there is no way to tamper with a `records` row, delete an `anchor_records` pin, or hide/fake a `batches` row that survives more than one cycle (Phases 1-3) or `MONITOR_SUBMITTED_STALE_MS` (Phase 5) undetected. See [`docs/superpowers/specs/2026-09-24-monitor-service-daemon-design.md`](../superpowers/specs/2026-09-24-monitor-service-daemon-design.md) §3.1 for the argument for why this is complete without needing to enumerate every root the contract has ever accepted.
+Together, there is no way to tamper with a `records` row, delete or forge an `anchor_records` pin, or hide/fake a `batches` row that survives more than one cycle (Phases 1-3) or `MONITOR_SUBMITTED_STALE_MS` (Phase 5) undetected. Two things are deliberately out of this daemon's reach, because the evidence never reaches the chain: a record deleted *before* `anchor-service` ever anchored it, and a replay of a legitimately signed create under a new `entity_id` (both documented in the E2E test plan, scenarios 9 and 10b). See [`docs/superpowers/specs/2026-09-24-monitor-service-daemon-design.md`](../superpowers/specs/2026-09-24-monitor-service-daemon-design.md) §3.1 for the argument for why the checks above are complete without needing to enumerate every root the contract has ever accepted.
 
-Every alert this daemon writes is deduplicated before insertion. `recordRootDivergence` / `recordTampered` (`src/alerts.ts`) each check for an existing row of the same `alert_type`, keyed by `batch_id` (using Postgres's null-safe `IS NOT DISTINCT FROM`, since the whole-system count check's alert has a `null` `batch_id`) or `record_id`, before writing a new one. A batch or record that keeps failing the same check, cycle after cycle, produces exactly one alert, not one per cycle — the same convention `anchor-service`'s own `signature_mismatch` alerts already use.
+Every alert this daemon writes is deduplicated before insertion, so a batch or record that keeps failing the same check, cycle after cycle, produces exactly one alert, not one per cycle — the same convention `anchor-service`'s own alerts use. The key differs by alert (`src/alerts.ts`): `recordRootDivergence` looks for an existing `root_divergence` row for the same `batch_id` (using Postgres's null-safe `IS NOT DISTINCT FROM`; for the whole-system count alert, whose `batch_id` is `null`, it matches only rows that also have no `expected_root`, so it is never suppressed by a missing-batch alert); `recordMissingBatch` keys on the batch's on-chain root (`expected_root`), so a later, different missing batch still alerts; `recordTampered` keys on `record_id`.
 
 ---
 
 ## 4. Alert Taxonomy
 
-| `alert_type` | Fired by | `batch_id` | `record_id` | `expected_root` | Meaning |
-|---|---|---|---|---|---|
-| `root_divergence` | Phase 1 (count) | `null` | `null` | `null` | The contract's total root count disagrees with how many batches Postgres tracks as on-chain-or-on-the-way, and no missing/inconsistent batch explains it. No single batch to blame. |
-| `root_divergence` | Phase 1 (missing / inconsistent batch) | `null` | `null` | the batch's on-chain root | A batch the contract accepted has no `batches` row in Postgres, or Postgres lists it as `'pending'`/`'failed'`. Deduplicated by `expected_root`, so a later, different missing batch still alerts. |
-| `root_divergence` | Phase 3 (step 1) | real | `null` | `null` | A `'confirmed'` batch has no on-chain `BatchInfo` at all — its status was tampered, or it was never really confirmed. |
-| `root_divergence` | Phase 3 (step 2) | real | `null` | on-chain root | A batch's `anchor_records` count no longer matches its on-chain size — a pinned record was deleted (or, anomalously, an extra one appeared). |
-| `root_divergence` | Phase 5 | real | `null` | `null` | A `'submitted'` batch has had no on-chain `BatchInfo` for longer than any honest confirmation/resend cycle should take — likely fabricated or permanently stuck. |
-| `record_tampered` | Phase 3 (step 3) | real | real | on-chain root | One specific record's recomputed leaf no longer verifies against its stored proof and the batch's on-chain root — its data was edited after anchoring. |
+| `alert_type` | Fired by | `batch_id` | `record_id` | `expected_root` | Deduplicated by | Meaning |
+|---|---|---|---|---|---|---|
+| `root_divergence` | Phase 1 (count) | `null` | `null` | `null` | `batch_id` null + no `expected_root` | The contract's total root count disagrees with how many batches Postgres tracks as on-chain-or-on-the-way, and no missing/inconsistent batch explains it. No single batch to blame. |
+| `root_divergence` | Phase 1 (missing / inconsistent batch) | `null` | `null` | the batch's on-chain root | `expected_root` | A batch the contract accepted has no `batches` row in Postgres, or Postgres lists it as `'pending'`/`'failed'`. |
+| `root_divergence` | Phase 3 (step 1) | real | `null` | `null` | `batch_id` | A `'confirmed'` batch has no on-chain `BatchInfo` at all — its status was tampered, or it was never really confirmed. |
+| `root_divergence` | Phase 3 (step 2) | real | `null` | on-chain root | `batch_id` | A batch's `anchor_records` count no longer matches its on-chain size — a pinned record was deleted, or an extra one appeared. |
+| `root_divergence` | Phase 5 | real | `null` | `null` | `batch_id` | A `'submitted'` batch has had no on-chain `BatchInfo` for longer than any honest confirmation/resend cycle should take — likely fabricated or permanently stuck. |
+| `record_tampered` | Phase 3 (step 3) | real | real | on-chain root | `record_id` | One specific record's recomputed leaf no longer verifies against its stored proof and the batch's on-chain root — its data was edited after anchoring, or the record is a forged pin. |
 
-Every row here is written with `source = 'monitor'`, distinguishing it from `anchor-service`'s own `signature_mismatch` alerts (`source = 'anchor'`) in the same `integrity_alerts` table.
+The three per-batch `root_divergence` rows (Phase 3 steps 1 and 2, Phase 5) share one dedup slot per `batch_id`: a batch gets at most one of them, whichever fires first.
+
+Every row here is written with `source = 'monitor'`, distinguishing it from `anchor-service`'s own alerts (`source = 'anchor'`: `signature_mismatch`, `duplicate_root`, `root_divergence`, `record_tampered`) in the same `integrity_alerts` table.
+
+---
+
+## 5. Configuration Reference
+
+Required: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/config.ts`; `ANCHOR_PRIVATE_KEY` must **not** be set). Everything else is optional:
+
+| Variable | Default in code | Effect |
+|---|---|---|
+| `CONTRACT_ADDRESS` | resolved from the committed deployment registry for `ANCHOR_CHAIN_ID` | Address of `MerkleAnchorRegistry`. |
+| `MONITOR_CRON_SCHEDULE` | `*/5 * * * *` | When cycles start (§1.3). |
+| `MONITOR_RPC_RETRIES` | `4` | `p-retry` attempts for each on-chain read (§1.2). |
+| `MONITOR_SUBMITTED_STALE_MS` | `86400000` (24 h) | How long a batch must stay `'submitted'`, as seen by this process, before Phase 5 checks the chain for it. |
+| `ANCHOR_MAX_BATCH_SIZE` | unset → rebuild limit `100000` | Read as the largest on-chain batch size whose root Phase 3 rebuilds in memory (`rootRebuildMaxSize`); larger batches are verified record by record. Shared with `anchor-service`, which never builds a batch above this size once the cap is enforced there. |
+| `SHUTDOWN_GRACE_MS` | `30000` | Grace period for an in-flight cycle on shutdown (§1.4). |
+| `LOG_LEVEL` | `info` | pino log level. |
