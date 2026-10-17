@@ -8,6 +8,23 @@ export type CycleStatus =
   | "aborted"
   | "duplicate-skipped";
 
+/**
+ * What happened to one batch of a cycle. `pending` means shutdown was
+ * requested right after the batch persisted, so it was never submitted;
+ * `duplicate-skipped` means its root already existed on-chain and nothing was
+ * persisted for it.
+ */
+export interface BatchOutcome {
+  root: string;
+  size: number;
+  status: "confirmed" | "submitted" | "failed" | "duplicate-skipped" | "pending";
+  txHash: string | null;
+  blockNumber: number | null;
+  gasUsed: string | null;
+  gasPrice: string | null;
+  stageMs: Record<string, number>;
+}
+
 export interface CycleSummary {
   cycle: number;
   reconciled: ReconcileSummary;
@@ -19,6 +36,7 @@ export interface CycleSummary {
   blockNumber: number | null;
   gasUsed: string | null;
   gasPrice: string | null;
+  batches: BatchOutcome[];
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;
@@ -40,6 +58,7 @@ export function buildCycleSummary(input: {
   blockNumber: number | null;
   gasUsed: string | null;
   gasPrice: string | null;
+  batches: BatchOutcome[];
   status: CycleStatus;
   durationMs: number;
   stageMs: Record<string, number>;
@@ -51,6 +70,15 @@ export function buildCycleSummary(input: {
 
   return {
     ...input,
+    batches: input.batches.map((batch) => ({
+      ...batch,
+      stageMs: Object.fromEntries(
+        Object.entries(batch.stageMs).map(([stage, ms]) => [
+          stage,
+          Math.round(ms),
+        ]),
+      ),
+    })),
     durationMs: Math.round(input.durationMs),
     stageMs: roundedStageMs,
   };

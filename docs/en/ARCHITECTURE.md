@@ -189,7 +189,7 @@ Batch process executed periodically (e.g. every 1 to 3 hours). Each cycle (full 
 1. **Reconciliation:** Resolves batches a previous cycle left in flight (`pending`, `submitted`, `failed`) before any new work.
 2. **Scan:** Fetches records in `records` that do not yet have an associated entry in `anchor_records`.
 3. **Prior Validation:** Checks that the digital signature (over the record's full signable content) matches the signer and that the signer is whitelisted. If not, emits a `signature_mismatch` alert and discards the record from the batch.
-4. **Tree Construction:** Generates the leaves $L_i$, computes the Merkle Root, and extracts the `merkle_proof` for each leaf.
+4. **Tree Construction:** Generates the leaves $L_i$, computes the Merkle Root, and extracts the `merkle_proof` for each leaf. A large backlog is split into batches of at most `ANCHOR_MAX_BATCH_SIZE` records (default 100,000), each anchored as its own batch in the same cycle (steps 5-7 repeat per batch).
 5. **Duplicate-Root Guard:** If the root already exists on-chain, persists nothing and emits a `duplicate_root` alert.
 6. **Batch Persistence:** In one transaction, inserts the batch (status `pending`) into `batches` and persists the individual proofs in `anchor_records`.
 7. **On-Chain Transaction:** Invokes `MerkleAnchorRegistry.addMerkleRoot(root, size, batchId)` on the decentralized network and waits for confirmation, after which the batch becomes `confirmed`.

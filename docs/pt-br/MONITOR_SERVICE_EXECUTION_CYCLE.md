@@ -197,6 +197,6 @@ Obrigatórias: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/
 | `MONITOR_CRON_SCHEDULE` | `*/5 * * * *` | Quando os ciclos começam (§1.3). |
 | `MONITOR_RPC_RETRIES` | `4` | Tentativas do `p-retry` para cada leitura on-chain (§1.2). |
 | `MONITOR_SUBMITTED_STALE_MS` | `86400000` (24 h) | Por quanto tempo um lote precisa permanecer `'submitted'`, visto por este processo, antes de a Fase 5 consultar a chain por ele. |
-| `ANCHOR_MAX_BATCH_SIZE` | não definido → limite de reconstrução `100000` | Lido como o maior `size` on-chain de lote cuja raiz a Fase 3 reconstrói em memória (`rootRebuildMaxSize`); lotes maiores são verificados registro a registro. Compartilhado com o `anchor-service`, que nunca constrói um lote acima desse tamanho quando o limite for aplicado lá. |
+| `ANCHOR_MAX_BATCH_SIZE` | não definido → limite de reconstrução `100000` | Lido como o maior `size` on-chain de lote cuja raiz a Fase 3 reconstrói em memória (`rootRebuildMaxSize`); lotes maiores são verificados registro a registro. Compartilhado com o `anchor-service`, que nunca constrói um lote acima desse tamanho; ambos usam o mesmo padrão (`DEFAULT_MAX_BATCH_SIZE` em `service-runtime`) quando não definido. |
 | `SHUTDOWN_GRACE_MS` | `30000` | Período de tolerância para um ciclo em andamento no encerramento (§1.4). |
 | `LOG_LEVEL` | `info` | Nível de log do pino. |

@@ -21,7 +21,8 @@ const UNANCHORED_QUERY = `
   FROM
       records r
   WHERE
-      NOT EXISTS (
+      r.id > $1
+      AND NOT EXISTS (
           SELECT
               1
           FROM
@@ -31,21 +32,35 @@ const UNANCHORED_QUERY = `
       )
   ORDER BY
       r.id ASC
+  LIMIT
+      $2
 `;
 
 /**
- * Streams unanchored records in ascending ID order, yielding one at a time
- * to avoid loading the entire result set into memory.
+ * Which slice of the un-anchored backlog to read: records with an id greater
+ * than `afterId`, at most `limit` of them (`null` = no limit). A cycle walks
+ * the backlog by moving `afterId` forward, one short query per batch, instead
+ * of holding one cursor open across every batch's chain wait.
+ */
+export interface RecordWindow {
+  afterId?: number;
+  limit?: number | null;
+}
+
+/**
+ * Streams the un-anchored records of `window` in ascending ID order, yielding
+ * one at a time to avoid loading the entire result set into memory.
  */
 export async function* streamUnanchoredRecords(
   pool: Pool,
-  batchSize = 10_000,
+  window: RecordWindow = {},
+  fetchSize = 10_000,
 ): AsyncGenerator<AnchorableRecord> {
   for await (const row of streamRows<RecordRow>(
     pool,
     UNANCHORED_QUERY,
-    [],
-    batchSize,
+    [window.afterId ?? 0, window.limit ?? null],
+    fetchSize,
   )) {
     yield toAnchorableRecord(row);
   }

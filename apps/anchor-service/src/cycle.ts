@@ -32,20 +32,30 @@ import {
 } from "./chain-submit.ts";
 import { type ChainClient, createProviderAdapter } from "./chain.ts";
 import type { AnchorConfig } from "./config.ts";
-import { buildCycleSummary, type CycleSummary } from "./metrics.ts";
+import {
+  type BatchOutcome,
+  buildCycleSummary,
+  type CycleStatus,
+  type CycleSummary,
+} from "./metrics.ts";
 import {
   createReconcileDeps,
   reconcileBatches,
   type ReconcileSummary,
 } from "./reconcile.ts";
-import { streamUnanchoredRecords as dbStreamUnanchoredRecords } from "./records-source.ts";
+import {
+  type RecordWindow,
+  streamUnanchoredRecords as dbStreamUnanchoredRecords,
+} from "./records-source.ts";
 import { buildAnchorTree, type LeafEntry } from "./tree.ts";
 import { validateRecord } from "./validation.ts";
 
 export interface CycleDeps {
   reconcileBatches(): Promise<ReconcileSummary>;
   records: {
-    streamUnanchoredRecords(): AsyncGenerator<AnchorableRecord>;
+    streamUnanchoredRecords(
+      window: RecordWindow,
+    ): AsyncGenerator<AnchorableRecord>;
   };
   chain: {
     findRootOnChain(root: string): Promise<OnChainRootOwner | null>;
@@ -90,12 +100,24 @@ type SubmitDeps = Pick<CycleDeps, "chain"> & {
   alerts: Pick<CycleDeps["alerts"], "recordDuplicateRoot">;
 };
 
-export interface CollectedBatch {
+/** A validated slice of the backlog, ready to be anchored as one batch. */
+export interface BatchToAnchor {
   root: string;
   size: number;
   entries: AnchorEntry[];
+}
+
+/**
+ * What one read of the backlog found. `batch` is `null` when no record in the
+ * window passed validation, but the counts are always real: the caller needs
+ * `scannedCount` to know whether the backlog is exhausted, and
+ * `lastRecordId` to start the next window after what was already read.
+ */
+export interface Collection {
+  batch: BatchToAnchor | null;
   scannedCount: number;
   rejectedCount: number;
+  lastRecordId: number | null;
   stageMs: { scanAndValidate: number; tree: number };
 }
 
@@ -104,6 +126,8 @@ export interface CycleOptions {
   whitelistedAddresses: string[];
   confirmations: number;
   confirmationTimeoutMs: number;
+  /** Most records scanned for one batch (rejected ones count). */
+  maxBatchSize: number;
 }
 
 export type SubmitAndConfirmResult =
@@ -125,13 +149,12 @@ export type SubmitAndConfirmResult =
     };
 
 /**
- * 1. Get every un-anchored record
- * 2. Validates each one (signature + whitelist)
- * 3. Alerts the ones that fails
- * 4. Build a Merkle Tree from the valid ones
+ * 1. Reads one window of the un-anchored backlog
+ * 2. Validates each record (signature + whitelist)
+ * 3. Alerts the ones that fail
+ * 4. Builds a Merkle tree from the valid ones
  *
- * Returns `null` ("nothing to anchor") if zero records passed validation;
- * never calls `buildAnchorTree` with an empty array.
+ * Never calls `buildAnchorTree` with an empty array.
  */
 export async function collectValidBatch(
   deps: Pick<CycleDeps, "records"> & {
@@ -139,21 +162,24 @@ export async function collectValidBatch(
   },
   whitelistedAddresses: string[],
   logger: Logger,
-): Promise<CollectedBatch | null> {
+  window: RecordWindow = {},
+): Promise<Collection> {
   const scanStart = performance.now();
   const leaves: LeafEntry[] = [];
   let scannedCount = 0;
   let rejectedCount = 0;
+  let lastRecordId: number | null = null;
 
   /**
-   * Get all unanchored records and validate them. Those that pass validation are added to the Merkle tree,
+   * Validate every record of the window. Those that pass are added to the Merkle tree,
    * those that fail are logged and an alert is inserted.
    *
    * The biggest bottleneck is here, ESCDA signature verification is expensive, and we have to do it for every record.
    * We could consider batching or parallelizing this in the future, but for now, we process them sequentially.
    */
-  for await (const record of deps.records.streamUnanchoredRecords()) {
+  for await (const record of deps.records.streamUnanchoredRecords(window)) {
     scannedCount++;
+    lastRecordId = record.id;
     const verdict = validateRecord(record, whitelistedAddresses);
 
     if (!verdict.ok) {
@@ -177,7 +203,13 @@ export async function collectValidBatch(
   const scanAndValidateMs = performance.now() - scanStart;
 
   if (leaves.length === 0) {
-    return null;
+    return {
+      batch: null,
+      scannedCount,
+      rejectedCount,
+      lastRecordId,
+      stageMs: { scanAndValidate: scanAndValidateMs, tree: 0 },
+    };
   }
 
   const treeStart = performance.now();
@@ -185,14 +217,17 @@ export async function collectValidBatch(
   const treeMs = performance.now() - treeStart;
 
   return {
-    root: tree.root,
-    size: tree.entries.length,
-    entries: tree.entries.map((entry) => ({
-      recordId: entry.recordId,
-      proof: entry.proof,
-    })),
+    batch: {
+      root: tree.root,
+      size: tree.entries.length,
+      entries: tree.entries.map((entry) => ({
+        recordId: entry.recordId,
+        proof: entry.proof,
+      })),
+    },
     scannedCount,
     rejectedCount,
+    lastRecordId,
     stageMs: { scanAndValidate: scanAndValidateMs, tree: treeMs },
   };
 }
@@ -381,13 +416,151 @@ export async function submitAndConfirmBatch(
 }
 
 /**
+ * Takes one validated batch through Phases 3.5-6: the duplicate-root guard,
+ * persistence, the cooperative shutdown checkpoint, then submission and
+ * confirmation. Always returns an outcome, never throws for a chain-side
+ * failure; the caller decides whether the next batch may go ahead.
+ */
+export async function anchorBatch(
+  deps: CycleDeps,
+  batch: BatchToAnchor,
+  options: Pick<CycleOptions, "cycleNumber" | "confirmations" | "confirmationTimeoutMs">,
+  logger: Logger,
+  shouldAbort: () => boolean,
+): Promise<BatchOutcome> {
+  const nothingSent = {
+    root: batch.root,
+    size: batch.size,
+    txHash: null,
+    blockNumber: null,
+    gasUsed: null,
+    gasPrice: null,
+  };
+
+  // Phase 3.5: if this exact root is already on-chain (under some batch),
+  // the contract would reject it. Persist nothing and move on — a phantom
+  // 'confirmed' row here is the bug this guard exists to prevent.
+  const { result: existingOwner, ms: duplicateCheckMs } = await timed(() =>
+    deps.chain.findRootOnChain(batch.root),
+  );
+
+  if (existingOwner) {
+    const ownerRowExists = await deps.batches.batchExists(
+      existingOwner.ownerBatchId,
+    );
+    const ownerState = ownerRowExists
+      ? `batch ${existingOwner.ownerBatchId} still exists in Postgres, so its anchor_records pins were likely deleted`
+      : `batch ${existingOwner.ownerBatchId} no longer exists in Postgres, so its batches row and pins were likely deleted`;
+    const message = `rebuilt root ${batch.root} already exists on-chain (contract RootAlreadyExists) under batch ${existingOwner.ownerBatchId}; ${ownerState}. Skipping ${batch.entries.length} unpinned record(s): nothing inserted. This clears when a new record changes the set.`;
+
+    const isNew = await deps.alerts.recordDuplicateRoot(
+      null,
+      batch.root,
+      message,
+    );
+    // A stalled set is re-detected every cycle: shout once, then stay visible but quiet.
+    logger[isNew ? "error" : "warn"](
+      { ownerBatchId: existingOwner.ownerBatchId, root: batch.root },
+      message,
+    );
+
+    return {
+      ...nothingSent,
+      status: "duplicate-skipped",
+      stageMs: { duplicateCheck: duplicateCheckMs },
+    };
+  }
+
+  // Phase 4
+  const { result: batchId, ms: persistMs } = await timed(() =>
+    deps.batches.persistBatch({ root: batch.root, entries: batch.entries }),
+  );
+
+  if (shouldAbort()) {
+    logger.warn(
+      { cycle: options.cycleNumber, batchId },
+      "shutdown requested — leaving batch 'pending' for the next startup's Phase 0 to submit",
+    );
+
+    return {
+      ...nothingSent,
+      status: "pending",
+      stageMs: { duplicateCheck: duplicateCheckMs, persist: persistMs },
+    };
+  }
+
+  // Phase 5-6
+  const submitResult = await submitAndConfirmBatch(
+    deps,
+    { id: batchId, merkleRoot: batch.root, size: batch.size },
+    {
+      confirmations: options.confirmations,
+      confirmationTimeoutMs: options.confirmationTimeoutMs,
+    },
+    logger,
+  );
+
+  const stageMs = {
+    duplicateCheck: duplicateCheckMs,
+    persist: persistMs,
+    ...submitResult.stageMs,
+  };
+
+  if (submitResult.status === "failed") {
+    return { ...nothingSent, status: "failed", stageMs };
+  }
+
+  if (submitResult.status === "submitted") {
+    return {
+      ...nothingSent,
+      status: "submitted",
+      txHash: submitResult.txHash,
+      stageMs,
+    };
+  }
+
+  return {
+    ...nothingSent,
+    status: "confirmed",
+    txHash: submitResult.txHash,
+    blockNumber: submitResult.block.number,
+    gasUsed: submitResult.block.gasUsed ?? null,
+    gasPrice: submitResult.block.gasPrice ?? null,
+    stageMs,
+  };
+}
+
+/** A batch the cycle can move past: anchored, or safely skipped as a duplicate. */
+const isClean = (outcome: BatchOutcome) =>
+  outcome.status === "confirmed" || outcome.status === "duplicate-skipped";
+
+/**
+ * Rolls the batches of one cycle up into a single status. The first batch that
+ * was not clean decides it (the cycle stops there); otherwise the cycle is
+ * `confirmed` if anything was anchored, `duplicate-skipped` if everything was
+ * a duplicate, and `nothing-to-anchor` if there was no batch at all.
+ */
+function rollUpStatus(
+  outcomes: BatchOutcome[],
+  interrupted: boolean,
+): CycleStatus {
+  const problem = outcomes.find((outcome) => !isClean(outcome));
+  if (problem) return problem.status === "pending" ? "aborted" : problem.status;
+  if (interrupted) return "aborted";
+  if (outcomes.some((outcome) => outcome.status === "confirmed")) {
+    return "confirmed";
+  }
+  return outcomes.length > 0 ? "duplicate-skipped" : "nothing-to-anchor";
+}
+
+/**
  * Sequences one full anchoring cycle:
  * 1. Phase 0 (reconcile in-flight batches),
- * 2. Phases 1–3 (collect a new valid batch, or "nothing to anchor"),
- * 2b. Phase 3.5 (skip a collection whose root already exists on-chain),
- * 3. Phase 4 (persist),
- * 4. Phases 5–6 (submit + await confirmation)
- * 5. Phase 7 (summary).
+ * 2. a loop over the backlog in windows of `options.maxBatchSize` records —
+ *    each window is validated (Phases 1-3) and, if anything passed, anchored
+ *    as its own batch (Phases 3.5-6) — until the backlog is exhausted, a batch
+ *    does not come out clean, or shutdown is requested,
+ * 3. Phase 7 (summary of every batch this cycle ran).
  */
 export async function runCycle(
   deps: CycleDeps,
@@ -402,159 +575,96 @@ export async function runCycle(
     deps.reconcileBatches(),
   );
 
-  // Phase 1-3
-  const { result: collected, ms: collectMs } = await timed(() =>
-    collectValidBatch(deps, options.whitelistedAddresses, logger),
-  );
+  const outcomes: BatchOutcome[] = [];
+  const stageMs: Record<string, number> = { reconcile: reconcileMs };
+  const addStage = (stage: string, ms: number) => {
+    stageMs[stage] = (stageMs[stage] ?? 0) + ms;
+  };
+  let scanned = 0;
+  let rejected = 0;
+  let afterId = 0;
+  let interrupted = false;
 
-  if (!collected) {
+  for (let index = 0; ; index++) {
+    // Between batches: shutdown stops the cycle without starting new work.
+    if (index > 0 && shouldAbort()) {
+      interrupted = true;
+      break;
+    }
+
+    // Phases 1-3
+    const collection = await collectValidBatch(
+      deps,
+      options.whitelistedAddresses,
+      logger,
+      { afterId, limit: options.maxBatchSize },
+    );
+    scanned += collection.scannedCount;
+    rejected += collection.rejectedCount;
+    addStage("scanAndValidate", collection.stageMs.scanAndValidate);
+    addStage("tree", collection.stageMs.tree);
+
+    if (collection.batch) {
+      // Phases 3.5-6
+      const outcome = await anchorBatch(
+        deps,
+        collection.batch,
+        options,
+        logger,
+        shouldAbort,
+      );
+      outcomes.push(outcome);
+      for (const [stage, ms] of Object.entries(outcome.stageMs)) {
+        addStage(stage, ms);
+      }
+      logger.info(
+        {
+          cycle: options.cycleNumber,
+          batch: outcomes.length,
+          size: outcome.size,
+          status: outcome.status,
+          root: outcome.root,
+        },
+        "batch processed",
+      );
+
+      if (!isClean(outcome)) break;
+    }
+
+    // A short window means the backlog is exhausted.
+    if (collection.scannedCount < options.maxBatchSize) break;
+    afterId = collection.lastRecordId ?? afterId;
+  }
+
+  if (outcomes.length === 0 && !interrupted) {
     logger.info({ cycle: options.cycleNumber }, "nothing to anchor this cycle");
-
-    return buildCycleSummary({
-      cycle: options.cycleNumber,
-      reconciled,
-      scanned: 0,
-      rejected: 0,
-      batched: 0,
-      root: null,
-      txHash: null,
-      blockNumber: null,
-      gasUsed: null,
-      gasPrice: null,
-      status: "nothing-to-anchor",
-      durationMs: performance.now() - cycleStart,
-      stageMs: { reconcile: reconcileMs, collect: collectMs },
-      peakRssBytes: snapshotMemory().rssBytes,
-    });
   }
-
-  // Phase 3.5: if this exact root is already on-chain (under some batch),
-  // the contract would reject it. Persist nothing and end this collection —
-  // a phantom 'confirmed' row here is the bug this guard exists to prevent.
-  const { result: existingOwner, ms: duplicateCheckMs } = await timed(() =>
-    deps.chain.findRootOnChain(collected.root),
-  );
-
-  if (existingOwner) {
-    const ownerRowExists = await deps.batches.batchExists(
-      existingOwner.ownerBatchId,
-    );
-    const ownerState = ownerRowExists
-      ? `batch ${existingOwner.ownerBatchId} still exists in Postgres, so its anchor_records pins were likely deleted`
-      : `batch ${existingOwner.ownerBatchId} no longer exists in Postgres, so its batches row and pins were likely deleted`;
-    const message = `rebuilt root ${collected.root} already exists on-chain (contract RootAlreadyExists) under batch ${existingOwner.ownerBatchId}; ${ownerState}. Skipping ${collected.entries.length} unpinned record(s): nothing inserted. This clears when a new record changes the set.`;
-
-    const isNew = await deps.alerts.recordDuplicateRoot(
-      null,
-      collected.root,
-      message,
-    );
-    // A stalled set is re-detected every cycle: shout once, then stay visible but quiet.
-    logger[isNew ? "error" : "warn"](
-      { ownerBatchId: existingOwner.ownerBatchId, root: collected.root },
-      message,
-    );
-
-    return buildCycleSummary({
-      cycle: options.cycleNumber,
-      reconciled,
-      scanned: collected.scannedCount,
-      rejected: collected.rejectedCount,
-      batched: 0,
-      root: collected.root,
-      txHash: null,
-      blockNumber: null,
-      gasUsed: null,
-      gasPrice: null,
-      status: "duplicate-skipped",
-      durationMs: performance.now() - cycleStart,
-      stageMs: {
-        reconcile: reconcileMs,
-        ...collected.stageMs,
-        duplicateCheck: duplicateCheckMs,
-      },
-      peakRssBytes: snapshotMemory().rssBytes,
-    });
-  }
-
-  // Phase 4
-  const { result: batchId, ms: persistMs } = await timed(() =>
-    deps.batches.persistBatch({
-      root: collected.root,
-      entries: collected.entries,
-    }),
-  );
-
-  if (shouldAbort()) {
-    logger.warn(
-      { cycle: options.cycleNumber, batchId },
-      "shutdown requested — leaving batch 'pending' for the next startup's Phase 0 to submit",
-    );
-
-    return buildCycleSummary({
-      cycle: options.cycleNumber,
-      reconciled,
-      scanned: collected.scannedCount,
-      rejected: collected.rejectedCount,
-      batched: collected.entries.length,
-      root: collected.root,
-      txHash: null,
-      blockNumber: null,
-      gasUsed: null,
-      gasPrice: null,
-      status: "aborted",
-      durationMs: performance.now() - cycleStart,
-      stageMs: {
-        reconcile: reconcileMs,
-        ...collected.stageMs,
-        persist: persistMs,
-      },
-      peakRssBytes: snapshotMemory().rssBytes,
-    });
-  }
-
-  // Phase 5-6
-  const submitResult = await submitAndConfirmBatch(
-    deps,
-    { id: batchId, merkleRoot: collected.root, size: collected.size },
-    {
-      confirmations: options.confirmations,
-      confirmationTimeoutMs: options.confirmationTimeoutMs,
-    },
-    logger,
-  );
 
   // Phase 7
+  const last = outcomes[outcomes.length - 1];
   const summary = buildCycleSummary({
     cycle: options.cycleNumber,
     reconciled,
-    scanned: collected.scannedCount,
-    rejected: collected.rejectedCount,
-    batched: collected.entries.length,
-    root: collected.root,
-    txHash: submitResult.status === "failed" ? null : submitResult.txHash,
-    blockNumber:
-      submitResult.status === "confirmed" ? submitResult.block.number : null,
-    gasUsed:
-      submitResult.status === "confirmed"
-        ? (submitResult.block.gasUsed ?? null)
-        : null,
-    gasPrice:
-      submitResult.status === "confirmed"
-        ? (submitResult.block.gasPrice ?? null)
-        : null,
-    status: submitResult.status,
+    scanned,
+    rejected,
+    batched: outcomes
+      .filter((outcome) => outcome.status !== "duplicate-skipped")
+      .reduce((total, outcome) => total + outcome.size, 0),
+    root: last?.root ?? null,
+    txHash: last?.txHash ?? null,
+    blockNumber: last?.blockNumber ?? null,
+    gasUsed: last?.gasUsed ?? null,
+    gasPrice: last?.gasPrice ?? null,
+    batches: outcomes,
+    status: rollUpStatus(outcomes, interrupted),
     durationMs: performance.now() - cycleStart,
-    stageMs: {
-      reconcile: reconcileMs,
-      ...collected.stageMs,
-      persist: persistMs,
-      ...submitResult.stageMs,
-    },
+    stageMs,
     peakRssBytes: snapshotMemory().rssBytes,
   });
 
-  logger.info(summary, "cycle complete");
+  if (outcomes.length > 0 || interrupted) {
+    logger.info(summary, "cycle complete");
+  }
   return summary;
 }
 
@@ -592,7 +702,8 @@ export function createCycleDeps(
         logger,
       ),
     records: {
-      streamUnanchoredRecords: () => dbStreamUnanchoredRecords(pool),
+      streamUnanchoredRecords: (window) =>
+        dbStreamUnanchoredRecords(pool, window),
     },
     chain: {
       findRootOnChain: (root) => chainFindRootOnChain(chain.contract, root),

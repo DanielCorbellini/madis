@@ -197,6 +197,6 @@ Required: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/confi
 | `MONITOR_CRON_SCHEDULE` | `*/5 * * * *` | When cycles start (§1.3). |
 | `MONITOR_RPC_RETRIES` | `4` | `p-retry` attempts for each on-chain read (§1.2). |
 | `MONITOR_SUBMITTED_STALE_MS` | `86400000` (24 h) | How long a batch must stay `'submitted'`, as seen by this process, before Phase 5 checks the chain for it. |
-| `ANCHOR_MAX_BATCH_SIZE` | unset → rebuild limit `100000` | Read as the largest on-chain batch size whose root Phase 3 rebuilds in memory (`rootRebuildMaxSize`); larger batches are verified record by record. Shared with `anchor-service`, which never builds a batch above this size once the cap is enforced there. |
+| `ANCHOR_MAX_BATCH_SIZE` | unset → rebuild limit `100000` | Read as the largest on-chain batch size whose root Phase 3 rebuilds in memory (`rootRebuildMaxSize`); larger batches are verified record by record. Shared with `anchor-service`, which never builds a batch above this size; both use the same default (`DEFAULT_MAX_BATCH_SIZE` in `service-runtime`) when it is unset. |
 | `SHUTDOWN_GRACE_MS` | `30000` | Grace period for an in-flight cycle on shutdown (§1.4). |
 | `LOG_LEVEL` | `info` | pino log level. |

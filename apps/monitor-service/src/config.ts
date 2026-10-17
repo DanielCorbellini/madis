@@ -1,8 +1,10 @@
 import { resolveContractAddress } from "contracts-shared";
 import "dotenv/config";
-import { integerEnv, requiredEnv } from "service-runtime";
-
-export const DEFAULT_ROOT_REBUILD_MAX_SIZE = 100_000;
+import {
+  DEFAULT_MAX_BATCH_SIZE,
+  integerEnv,
+  requiredEnv,
+} from "service-runtime";
 
 export interface MonitorConfig {
   databaseUrl: string;
@@ -66,7 +68,7 @@ export function loadConfig(
     rootRebuildMaxSize: integerEnv(
       env,
       "ANCHOR_MAX_BATCH_SIZE",
-      DEFAULT_ROOT_REBUILD_MAX_SIZE,
+      DEFAULT_MAX_BATCH_SIZE,
       { min: 1 },
     ),
     shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 30_000, { min: 0 }),
