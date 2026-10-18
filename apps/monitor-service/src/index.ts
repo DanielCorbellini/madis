@@ -17,15 +17,21 @@ import {
 } from "./chain.ts";
 import { loadConfig, type MonitorConfig } from "./config.ts";
 import { createCycleDeps, runMonitorCycle, type CycleDeps } from "./cycle.ts";
+import { createRandomInt } from "./random-source.ts";
 
 export async function main() {
   const config = loadConfig();
   const logger = createLogger(config.logLevel);
 
   logger.info(
-    { chainId: config.chainId, contract: config.contractAddress },
+    {
+      chainId: config.chainId,
+      contract: config.contractAddress,
+      auditMode: config.auditMode,
+    },
     "monitor-service starting",
   );
+  logSamplingWarnings(config, logger);
 
   const pool = createDbPool(config.databaseUrl);
   const chain = createReadOnlyChainClient(config);
@@ -54,6 +60,14 @@ export async function main() {
     submittedStaleMs: config.submittedStaleMs,
     listAnchoredBatches: () =>
       listAnchoredBatches(chain.contract, { retries: config.rpcRetries }),
+    ...(config.auditMode === "sampling" && {
+      sampling: {
+        sampleSize: config.sampleSize,
+        spotChecks: config.spotChecks,
+        randomInt: createRandomInt(config.sampleSeed),
+        escalateOnAnomaly: config.escalateOnAnomaly,
+      },
+    }),
   });
 
   let shutdownRequested = false;
@@ -94,6 +108,27 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     console.error(error);
     process.exit(1);
   });
+}
+
+/**
+ * Startup warnings for experiment-only settings: a known seed makes the
+ * sampled order predictable, and disabling escalation lets a tampered
+ * record wait out the full pass.
+ */
+export function logSamplingWarnings(
+  config: Pick<MonitorConfig, "auditMode" | "sampleSeed" | "escalateOnAnomaly">,
+  logger: Logger,
+): void {
+  if (config.sampleSeed !== undefined) {
+    logger.warn(
+      "MONITOR_SAMPLE_SEED is set — the sampling order is predictable; use it only for reproducible experiments",
+    );
+  }
+  if (config.auditMode === "sampling" && !config.escalateOnAnomaly) {
+    logger.warn(
+      "anomaly escalation is disabled — an anomaly will not trigger a full rescan; use it only for experiments",
+    );
+  }
 }
 
 export interface CycleScheduler {
