@@ -20,8 +20,11 @@ export interface CycleSelection {
 
 export interface AuditSelector {
   select(input: SelectInput): CycleSelection;
-  /** Puts slice ids whose audit failed without a verdict back into the unvisited part (§5.3.1). */
-  requeue(batchIds: number[]): void;
+  /**
+   * Puts slice ids whose audit failed without a verdict back into the unvisited
+   * part, at most once per pass (§5.3.1). Returns the ids refused a second time.
+   */
+  requeue(batchIds: number[]): number[];
 }
 
 export function createAuditSelector(options: {
@@ -35,6 +38,7 @@ export function createAuditSelector(options: {
   let known = new Set<number>();
   let cursor = 0;
   let pass = 0;
+  let requeuedThisPass = new Set<number>();
 
   // In-place Fisher-Yates; randomInt is never called with 0.
   const shuffle = (ids: number[]): void => {
@@ -115,6 +119,7 @@ export function createAuditSelector(options: {
         shuffle(order);
         cursor = 0;
         pass++;
+        requeuedThisPass = new Set();
       }
 
       const sliceIds = order.slice(cursor, cursor + sampleSize);
@@ -143,13 +148,21 @@ export function createAuditSelector(options: {
     },
 
     requeue(batchIds) {
+      const refused: number[] = [];
       for (const id of batchIds) {
         if (!known.has(id)) continue;
+        // A second failure in the same pass consumes the slot, so the pass still ends.
+        if (requeuedThisPass.has(id)) {
+          refused.push(id);
+          continue;
+        }
+        requeuedThisPass.add(id);
         const index = order.indexOf(id);
         order.splice(index, 1);
         if (index < cursor) cursor--;
         order.splice(cursor + randomInt(order.length - cursor + 1), 0, id);
       }
+      return refused;
     },
   };
 }

@@ -95,12 +95,14 @@ export interface MonitorCycleSummary {
 /**
  * Reads the chain's own `(batchId, root)` list and sorts it against what
  * Postgres says about those ids. A failure here must never break the cycle, so
- * it degrades to `null` and the caller falls back to the Postgres-driven
- * checks (confirmed rescan + generic count alert).
+ * it degrades to `null` and the caller falls back to the generic count alert
+ * plus, in full or escalated cycles, a confirmed-only rescan or, in sampling
+ * cycles, the current pass (nothing before the first pass, §5.7).
  */
 async function classifyChainBatches(
   deps: Pick<CycleDeps, "chain" | "batches">,
   logger: Logger,
+  sampled: boolean,
 ): Promise<OnChainBatchClassification | null> {
   try {
     const onChain = await deps.chain.listAnchoredBatches();
@@ -113,7 +115,9 @@ async function classifyChainBatches(
     const message = error instanceof Error ? error.message : String(error);
     logger.warn(
       { err: message },
-      "could not read the chain's batch list; auditing confirmed batches only and falling back to the generic count alert",
+      sampled
+        ? "could not read the chain's batch list; continuing the current pass from the last known list (auditing nothing if no pass has started), checking confirmed batches outside it on-chain, and falling back to the generic count alert"
+        : "could not read the chain's batch list; auditing confirmed batches only and falling back to the generic count alert",
     );
     return null;
   }
@@ -150,6 +154,14 @@ export async function runMonitorCycle(
   const sampling = deps.sampling;
   const escalated = sampling?.escalation.pending ?? false;
 
+  // Escalation is set the moment an anomaly is seen, so a later throw cannot lose it.
+  const countAnomalies = (count: number): void => {
+    anomalyCount += count;
+    if (count > 0 && sampling?.escalateOnAnomaly) {
+      sampling.escalation.pending = true;
+    }
+  };
+
   const { result: rootCountResult, ms: rootCountMs } = await timed(async () => {
     const [onChainRootCount, trackedBatchCount] = await Promise.all([
       deps.chain.getRootCount(),
@@ -159,12 +171,17 @@ export async function runMonitorCycle(
     return checkRootCount(onChainRootCount, trackedBatchCount);
   });
 
-  const classification = await classifyChainBatches(deps, logger);
+  const classification = await classifyChainBatches(
+    deps,
+    logger,
+    sampling !== undefined && !escalated,
+  );
 
-  anomalyCount +=
+  countAnomalies(
     (classification?.missing.length ?? 0) +
-    (classification?.inconsistent.length ?? 0) +
-    (rootCountResult.matches ? 0 : 1);
+      (classification?.inconsistent.length ?? 0) +
+      (rootCountResult.matches ? 0 : 1),
+  );
 
   // The chain knows every batch it accepted, so a batch Postgres lost track of
   // is named whether or not the counts happen to agree (a forged 'submitted'
@@ -238,189 +255,200 @@ export async function runMonitorCycle(
   });
 
   const { auditIds, selection } = selected;
-  const sliceIds = new Set(selection?.sliceIds);
-  const failedSliceIds: number[] = [];
+  // Slice ids still owed a verdict; whatever is left at the end goes back into the pass.
+  const owedSliceIds = new Set(selection?.sliceIds);
 
-  // A suspect is a confirmed id the chain list lacks; the chain has the last word.
-  const { ms: suspectMs } = await timed(async () => {
-    if (escalated) return;
-
-    for (const batchId of selection?.suspectIds ?? []) {
-      if (shouldAbort()) break;
-
-      try {
-        await deps.chain.getBatchInfo(batchId);
-      } catch (error) {
-        if (deps.chain.decodeRevertName(error) === "RootDoesNotExist") {
-          const message = `batch ${batchId} is 'confirmed' in Postgres but has no on-chain BatchInfo for this batchId — possible status tampering or the anchor was never actually confirmed`;
-          logger.error({ batchId }, message);
-          await deps.alerts.recordRootDivergence(batchId, null, message);
-          alertsFired++;
-          anomalyCount++;
-          continue;
-        }
-
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error(
-          { batchId, err: message },
-          "failed to check suspect batch, skipping",
-        );
-      }
-    }
-  });
-
-  let batchesChecked = 0;
-  let batchesComplete = 0;
-  let recordsChecked = 0;
-  let tamperedCount = 0;
-
-  const { ms: auditMs } = await timed(async () => {
-    for (const batchId of auditIds) {
-      if (shouldAbort()) {
-        logger.warn(
-          { cycle: cycleNumber, batchId },
-          "shutdown requested — stopping before the next batch",
-        );
-        break;
-      }
-
-      batchesChecked++;
-      memory.sample();
-
-      try {
-        const summary = await deps.auditBatch(batchId);
-
-        if (summary.complete) {
-          batchesComplete++;
-        } else {
-          alertsFired++;
-          anomalyCount++;
-        }
-
-        recordsChecked += summary.recordsChecked;
-        tamperedCount += summary.tamperedRecordIds.length;
-        alertsFired += summary.tamperedRecordIds.length;
-        anomalyCount += summary.tamperedRecordIds.length;
-      } catch (error) {
-        const revertName = deps.chain.decodeRevertName(error);
-
-        if (revertName === "RootDoesNotExist") {
-          const message = `batch ${batchId} is 'confirmed' in Postgres but has no on-chain BatchInfo for this batchId — possible status tampering or the anchor was never actually confirmed`;
-          logger.error({ batchId }, message);
-          await deps.alerts.recordRootDivergence(batchId, null, message);
-          alertsFired++;
-          anomalyCount++;
-          continue;
-        }
-
-        if (sliceIds.has(batchId)) failedSliceIds.push(batchId);
-
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error(
-          { batchId, err: message },
-          "failed to audit batch, skipping",
-        );
-      }
-    }
-  });
-
-  // Audits that ended without a verdict go back into the unvisited part of the pass.
-  if (failedSliceIds.length > 0) sampling?.selector.requeue(failedSliceIds);
-
-  const { result: submittedIds, ms: findSubmittedMs } = await timed(() =>
-    deps.batches.findSubmittedBatchIds(),
-  );
-
-  deps.tracking.pruneSubmittedTracking(submittedIds);
-
-  let submittedBatchesStaleChecked = 0;
-
-  const { ms: submittedMs } = await timed(async () => {
-    for (const batchId of submittedIds) {
-      if (shouldAbort()) {
-        break;
-      }
-
-      if (!deps.tracking.observeSubmittedBatch(batchId)) {
-        continue; // still within the normal in-flight grace period
-      }
-
-      submittedBatchesStaleChecked++;
-
-      try {
-        await deps.chain.getBatchInfo(batchId);
-        // Landed on-chain — Postgres just hasn't reconciled its status
-        // yet. Nothing to do; the next anchor-service reconcile cycle
-        // will catch up.
-      } catch (error) {
-        const revertName = deps.chain.decodeRevertName(error);
-
-        if (revertName === "RootDoesNotExist") {
-          const message = `batch ${batchId} has been 'submitted' with no on-chain BatchInfo for longer than expected — likely fabricated or permanently stuck`;
-          logger.error({ batchId }, message);
-          await deps.alerts.recordRootDivergence(batchId, null, message);
-          alertsFired++;
-          anomalyCount++;
-          continue;
-        }
-
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error(
-          { batchId, err: message },
-          "failed to check stale submitted batch, skipping",
-        );
-      }
-    }
-  });
-
-  // Keyed off anomalies, not alertsFired: alert inserts are deduplicated.
-  if (sampling) {
-    sampling.escalation.pending =
-      sampling.escalateOnAnomaly && anomalyCount > 0;
-  }
-
-  const summary: MonitorCycleSummary = {
-    cycle: cycleNumber,
-    batchesChecked,
-    batchesComplete,
-    recordsChecked,
-    tamperedCount,
-    rootCountMatches: rootCountResult.matches,
-    submittedBatchesStaleChecked,
-    alertsFired,
-    durationMs: Math.round(performance.now() - cycleStart),
-    stageMs: {
-      rootCountCheck: Math.round(rootCountMs),
-      ...(sampling && !escalated
-        ? {
-            selectBatches: Math.round(findMs),
-            suspectCheck: Math.round(suspectMs),
-          }
-        : { findConfirmedBatchIds: Math.round(findMs) }),
-      confirmedAudit: Math.round(auditMs),
-      findSubmittedBatchIds: Math.round(findSubmittedMs),
-      submittedStaleCheck: Math.round(submittedMs),
-    },
-    peakRssBytes: memory.peak().rssBytes,
-    auditMode: sampling ? "sampling" : "full",
-    escalated,
-    ...(sampling && selection
-      ? {
-          sampling: {
-            pass: selection.pass,
-            passPosition: selection.passPosition,
-            passLength: selection.passLength,
-            sampledCount: selection.sliceIds.length,
-            newCount: selection.newIds.length,
-            spotCount: selection.spotIds.length,
-            suspectCount: selection.suspectIds.length,
-          },
-        }
-      : {}),
+  const alertConfirmedWithoutRoot = async (batchId: number): Promise<void> => {
+    const message = `batch ${batchId} is 'confirmed' in Postgres but has no on-chain BatchInfo for this batchId — possible status tampering or the anchor was never actually confirmed`;
+    logger.error({ batchId }, message);
+    await deps.alerts.recordRootDivergence(batchId, null, message);
+    alertsFired++;
+    countAnomalies(1);
   };
 
-  logger.info(summary, "monitor cycle complete");
-  return summary;
+  try {
+    // A suspect is a confirmed id the chain list lacks; the chain has the last word.
+    const { ms: suspectMs } = await timed(async () => {
+      if (escalated) return;
+
+      for (const batchId of selection?.suspectIds ?? []) {
+        if (shouldAbort()) break;
+
+        try {
+          await deps.chain.getBatchInfo(batchId);
+        } catch (error) {
+          if (deps.chain.decodeRevertName(error) === "RootDoesNotExist") {
+            await alertConfirmedWithoutRoot(batchId);
+            continue;
+          }
+
+          const message =
+            error instanceof Error ? error.message : String(error);
+          logger.error(
+            { batchId, err: message },
+            "failed to check suspect batch, skipping",
+          );
+        }
+      }
+    });
+
+    let batchesChecked = 0;
+    let batchesComplete = 0;
+    let recordsChecked = 0;
+    let tamperedCount = 0;
+
+    const { ms: auditMs } = await timed(async () => {
+      for (const [index, batchId] of auditIds.entries()) {
+        if (shouldAbort()) {
+          logger.warn(
+            { cycle: cycleNumber, batchId },
+            "shutdown requested — stopping before the next batch",
+          );
+          // Skipped on shutdown, not failed: these slots stay consumed (§5.8).
+          for (const id of auditIds.slice(index)) owedSliceIds.delete(id);
+          break;
+        }
+
+        batchesChecked++;
+        memory.sample();
+
+        try {
+          const summary = await deps.auditBatch(batchId);
+          owedSliceIds.delete(batchId);
+
+          if (summary.complete) {
+            batchesComplete++;
+          } else {
+            alertsFired++;
+            countAnomalies(1);
+          }
+
+          recordsChecked += summary.recordsChecked;
+          tamperedCount += summary.tamperedRecordIds.length;
+          alertsFired += summary.tamperedRecordIds.length;
+          countAnomalies(summary.tamperedRecordIds.length);
+        } catch (error) {
+          const revertName = deps.chain.decodeRevertName(error);
+
+          if (revertName === "RootDoesNotExist") {
+            await alertConfirmedWithoutRoot(batchId);
+            owedSliceIds.delete(batchId);
+            continue;
+          }
+
+          const message =
+            error instanceof Error ? error.message : String(error);
+          logger.error(
+            { batchId, err: message },
+            "failed to audit batch, skipping",
+          );
+        }
+      }
+    });
+
+    const { result: submittedIds, ms: findSubmittedMs } = await timed(() =>
+      deps.batches.findSubmittedBatchIds(),
+    );
+
+    deps.tracking.pruneSubmittedTracking(submittedIds);
+
+    let submittedBatchesStaleChecked = 0;
+
+    const { ms: submittedMs } = await timed(async () => {
+      for (const batchId of submittedIds) {
+        if (shouldAbort()) {
+          break;
+        }
+
+        if (!deps.tracking.observeSubmittedBatch(batchId)) {
+          continue; // still within the normal in-flight grace period
+        }
+
+        submittedBatchesStaleChecked++;
+
+        try {
+          await deps.chain.getBatchInfo(batchId);
+          // Landed on-chain — Postgres just hasn't reconciled its status
+          // yet. Nothing to do; the next anchor-service reconcile cycle
+          // will catch up.
+        } catch (error) {
+          const revertName = deps.chain.decodeRevertName(error);
+
+          if (revertName === "RootDoesNotExist") {
+            const message = `batch ${batchId} has been 'submitted' with no on-chain BatchInfo for longer than expected — likely fabricated or permanently stuck`;
+            logger.error({ batchId }, message);
+            await deps.alerts.recordRootDivergence(batchId, null, message);
+            alertsFired++;
+            countAnomalies(1);
+            continue;
+          }
+
+          const message =
+            error instanceof Error ? error.message : String(error);
+          logger.error(
+            { batchId, err: message },
+            "failed to check stale submitted batch, skipping",
+          );
+        }
+      }
+    });
+
+    // Keyed off anomalies, not alertsFired: alert inserts are deduplicated.
+    if (sampling && anomalyCount === 0) sampling.escalation.pending = false;
+
+    const summary: MonitorCycleSummary = {
+      cycle: cycleNumber,
+      batchesChecked,
+      batchesComplete,
+      recordsChecked,
+      tamperedCount,
+      rootCountMatches: rootCountResult.matches,
+      submittedBatchesStaleChecked,
+      alertsFired,
+      durationMs: Math.round(performance.now() - cycleStart),
+      stageMs: {
+        rootCountCheck: Math.round(rootCountMs),
+        ...(sampling && !escalated
+          ? {
+              selectBatches: Math.round(findMs),
+              suspectCheck: Math.round(suspectMs),
+            }
+          : { findConfirmedBatchIds: Math.round(findMs) }),
+        confirmedAudit: Math.round(auditMs),
+        findSubmittedBatchIds: Math.round(findSubmittedMs),
+        submittedStaleCheck: Math.round(submittedMs),
+      },
+      peakRssBytes: memory.peak().rssBytes,
+      auditMode: sampling ? "sampling" : "full",
+      escalated,
+      ...(sampling && selection
+        ? {
+            sampling: {
+              pass: selection.pass,
+              passPosition: selection.passPosition,
+              passLength: selection.passLength,
+              sampledCount: selection.sliceIds.length,
+              newCount: selection.newIds.length,
+              spotCount: selection.spotIds.length,
+              suspectCount: selection.suspectIds.length,
+            },
+          }
+        : {}),
+    };
+
+    logger.info(summary, "monitor cycle complete");
+    return summary;
+  } finally {
+    // Failed or never reached (a throw): back into the unvisited part, once per pass (§5.3.1).
+    if (sampling && owedSliceIds.size > 0) {
+      for (const batchId of sampling.selector.requeue([...owedSliceIds])) {
+        logger.error(
+          { batchId },
+          `batch ${batchId} could not be audited this pass — its audit failed again after a requeue, so its slot is consumed`,
+        );
+      }
+    }
+  }
 }
 
 /**
