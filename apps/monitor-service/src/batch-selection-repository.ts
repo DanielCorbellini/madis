@@ -1,9 +1,8 @@
 import type { Queryable } from "service-runtime";
 
 /**
- * Every batch this cycle must audit, the full-rescan policy:
- * every confirmed batch, every cycle, no filtering, no `LIMIT`, no stored
- * progress state of any kind.
+ * Every confirmed batch, unfiltered and unlimited, no stored progress state:
+ * the full-rescan list, which the cycle's audit mode decides whether to audit in full.
  */
 export async function findConfirmedBatchIds(db: Queryable): Promise<number[]> {
   const { rows } = await db.query(

@@ -8,6 +8,7 @@ import {
   recordMissingBatch as dbRecordMissingBatch,
   recordRootDivergence as dbRecordRootDivergence,
 } from "./alerts.ts";
+import { createAuditSelector, type AuditSelector } from "./audit-selection.ts";
 import {
   auditBatch as runAuditBatch,
   type AuditDeps,
@@ -20,6 +21,7 @@ import {
   findBatchStatuses as dbFindBatchStatuses,
   type BatchStatus,
 } from "./batch-selection-repository.ts";
+import type { RandomInt } from "./random-source.ts";
 import {
   checkRootCount,
   classifyOnChainBatches,
@@ -27,6 +29,13 @@ import {
   type OnChainBatchClassification,
 } from "./root-count-check.ts";
 import { createStaleSubmittedTracker } from "./stale-submitted-tracker.ts";
+
+export interface SamplingDeps {
+  selector: AuditSelector;
+  escalateOnAnomaly: boolean;
+  /** Mutated by runMonitorCycle: true makes the next cycle a full rescan. */
+  escalation: { pending: boolean };
+}
 
 export interface CycleDeps {
   auditBatch(batchId: number): Promise<AuditSummary>;
@@ -54,6 +63,8 @@ export interface CycleDeps {
     ): Promise<boolean>;
     recordMissingBatch(root: string, details: string): Promise<boolean>;
   };
+  /** Absent means full mode: every anchored batch is audited each cycle. */
+  sampling?: SamplingDeps;
 }
 
 export interface MonitorCycleSummary {
@@ -68,6 +79,17 @@ export interface MonitorCycleSummary {
   durationMs: number;
   stageMs: Record<string, number>;
   peakRssBytes: number;
+  auditMode: "full" | "sampling";
+  escalated: boolean;
+  sampling?: {
+    pass: number;
+    passPosition: number;
+    passLength: number;
+    sampledCount: number;
+    newCount: number;
+    spotCount: number;
+    suspectCount: number;
+  };
 }
 
 /**
@@ -101,8 +123,8 @@ async function classifyChainBatches(
  * Sequences one full monitor cycle:
  * 1. the chain's batch list (missing/inconsistent batches) and the root
  *    count check,
- * 2. a full audit of every confirmed batch plus every on-chain batch that
- *    still has a row, whatever its `status`, and
+ * 2. an audit of the on-chain batches that still have a row, whatever their
+ *    `status` (the mode decides which: all of them, or a sampled subset), and
  * 3. the stale-submitted check.
  * Results from all three are aggregated into one structured summary
  * logged at the end.
@@ -124,6 +146,9 @@ export async function runMonitorCycle(
   const memory = trackPeakMemory();
 
   let alertsFired = 0;
+  let anomalyCount = 0;
+  const sampling = deps.sampling;
+  const escalated = sampling?.escalation.pending ?? false;
 
   const { result: rootCountResult, ms: rootCountMs } = await timed(async () => {
     const [onChainRootCount, trackedBatchCount] = await Promise.all([
@@ -135,6 +160,11 @@ export async function runMonitorCycle(
   });
 
   const classification = await classifyChainBatches(deps, logger);
+
+  anomalyCount +=
+    (classification?.missing.length ?? 0) +
+    (classification?.inconsistent.length ?? 0) +
+    (rootCountResult.matches ? 0 : 1);
 
   // The chain knows every batch it accepted, so a batch Postgres lost track of
   // is named whether or not the counts happen to agree (a forged 'submitted'
@@ -180,17 +210,63 @@ export async function runMonitorCycle(
     }
   }
 
-  // Audit every batch Postgres calls confirmed, plus every batch the chain
-  // accepted that Postgres still has a row for — whatever status that row
-  // claims, so flipping `status` cannot take a batch out of the audit.
-  const { result: batchIds, ms: findMs } = await timed(async () => {
+  // Full and escalated cycles audit every batch Postgres calls confirmed plus
+  // every batch the chain accepted that Postgres still has a row for, whatever
+  // status that row claims. Sampling cycles pick from the chain list only.
+  const { result: selected, ms: findMs } = await timed(async () => {
     const confirmed = await deps.batches.findConfirmedBatchIds();
     const seen = new Set(confirmed);
-
-    return [
+    const all = [
       ...confirmed,
       ...(classification?.auditable ?? []).filter((id) => !seen.has(id)),
     ];
+
+    if (!sampling) return { auditIds: all, selection: null };
+
+    const selection = sampling.selector.select({
+      chainIds: classification?.auditable ?? null,
+      confirmedIds: confirmed,
+      escalated,
+    });
+
+    return {
+      auditIds: escalated
+        ? all
+        : [...selection.sliceIds, ...selection.newIds, ...selection.spotIds],
+      selection,
+    };
+  });
+
+  const { auditIds, selection } = selected;
+  const sliceIds = new Set(selection?.sliceIds);
+  const failedSliceIds: number[] = [];
+
+  // A suspect is a confirmed id the chain list lacks; the chain has the last word.
+  const { ms: suspectMs } = await timed(async () => {
+    if (escalated) return;
+
+    for (const batchId of selection?.suspectIds ?? []) {
+      if (shouldAbort()) break;
+
+      try {
+        await deps.chain.getBatchInfo(batchId);
+      } catch (error) {
+        if (deps.chain.decodeRevertName(error) === "RootDoesNotExist") {
+          const message = `batch ${batchId} is 'confirmed' in Postgres but has no on-chain BatchInfo for this batchId — possible status tampering or the anchor was never actually confirmed`;
+          logger.error({ batchId }, message);
+          await deps.alerts.recordRootDivergence(batchId, null, message);
+          alertsFired++;
+          anomalyCount++;
+          continue;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(
+          { batchId, err: message },
+          "failed to check suspect batch, skipping",
+        );
+      }
+    }
   });
 
   let batchesChecked = 0;
@@ -199,7 +275,7 @@ export async function runMonitorCycle(
   let tamperedCount = 0;
 
   const { ms: auditMs } = await timed(async () => {
-    for (const batchId of batchIds) {
+    for (const batchId of auditIds) {
       if (shouldAbort()) {
         logger.warn(
           { cycle: cycleNumber, batchId },
@@ -218,11 +294,13 @@ export async function runMonitorCycle(
           batchesComplete++;
         } else {
           alertsFired++;
+          anomalyCount++;
         }
 
         recordsChecked += summary.recordsChecked;
         tamperedCount += summary.tamperedRecordIds.length;
         alertsFired += summary.tamperedRecordIds.length;
+        anomalyCount += summary.tamperedRecordIds.length;
       } catch (error) {
         const revertName = deps.chain.decodeRevertName(error);
 
@@ -231,8 +309,11 @@ export async function runMonitorCycle(
           logger.error({ batchId }, message);
           await deps.alerts.recordRootDivergence(batchId, null, message);
           alertsFired++;
+          anomalyCount++;
           continue;
         }
+
+        if (sliceIds.has(batchId)) failedSliceIds.push(batchId);
 
         const message = error instanceof Error ? error.message : String(error);
         logger.error(
@@ -242,6 +323,9 @@ export async function runMonitorCycle(
       }
     }
   });
+
+  // Audits that ended without a verdict go back into the unvisited part of the pass.
+  if (failedSliceIds.length > 0) sampling?.selector.requeue(failedSliceIds);
 
   const { result: submittedIds, ms: findSubmittedMs } = await timed(() =>
     deps.batches.findSubmittedBatchIds(),
@@ -276,6 +360,7 @@ export async function runMonitorCycle(
           logger.error({ batchId }, message);
           await deps.alerts.recordRootDivergence(batchId, null, message);
           alertsFired++;
+          anomalyCount++;
           continue;
         }
 
@@ -287,6 +372,12 @@ export async function runMonitorCycle(
       }
     }
   });
+
+  // Keyed off anomalies, not alertsFired: alert inserts are deduplicated.
+  if (sampling) {
+    sampling.escalation.pending =
+      sampling.escalateOnAnomaly && anomalyCount > 0;
+  }
 
   const summary: MonitorCycleSummary = {
     cycle: cycleNumber,
@@ -300,12 +391,32 @@ export async function runMonitorCycle(
     durationMs: Math.round(performance.now() - cycleStart),
     stageMs: {
       rootCountCheck: Math.round(rootCountMs),
-      findConfirmedBatchIds: Math.round(findMs),
+      ...(sampling && !escalated
+        ? {
+            selectBatches: Math.round(findMs),
+            suspectCheck: Math.round(suspectMs),
+          }
+        : { findConfirmedBatchIds: Math.round(findMs) }),
       confirmedAudit: Math.round(auditMs),
       findSubmittedBatchIds: Math.round(findSubmittedMs),
       submittedStaleCheck: Math.round(submittedMs),
     },
     peakRssBytes: memory.peak().rssBytes,
+    auditMode: sampling ? "sampling" : "full",
+    escalated,
+    ...(sampling && selection
+      ? {
+          sampling: {
+            pass: selection.pass,
+            passPosition: selection.passPosition,
+            passLength: selection.passLength,
+            sampledCount: selection.sliceIds.length,
+            newCount: selection.newIds.length,
+            spotCount: selection.spotIds.length,
+            suspectCount: selection.suspectIds.length,
+          },
+        }
+      : {}),
   };
 
   logger.info(summary, "monitor cycle complete");
@@ -323,6 +434,12 @@ export function createCycleDeps(
   options: {
     submittedStaleMs: number;
     listAnchoredBatches: () => Promise<AnchoredBatch[]>;
+    sampling?: {
+      sampleSize: number;
+      spotChecks: number;
+      randomInt: RandomInt;
+      escalateOnAnomaly: boolean;
+    };
   },
 ): CycleDeps {
   const tracker = createStaleSubmittedTracker(options.submittedStaleMs);
@@ -352,5 +469,12 @@ export function createCycleDeps(
       recordMissingBatch: (root, details) =>
         dbRecordMissingBatch(pool, root, details),
     },
+    ...(options.sampling && {
+      sampling: {
+        selector: createAuditSelector(options.sampling),
+        escalateOnAnomaly: options.sampling.escalateOnAnomaly,
+        escalation: { pending: false },
+      },
+    }),
   };
 }
