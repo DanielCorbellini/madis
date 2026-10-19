@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import {
   assertContractDeployed,
   assertNetworkMatches,
+  collectRunMetadata,
   writeResults,
 } from "service-runtime";
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
@@ -281,6 +282,7 @@ async function benchmarkChain(
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date();
   const { count, fresh } = parseCliArgs(process.argv.slice(2));
 
   const benchChainsRaw = process.env.BENCH_CHAINS;
@@ -307,6 +309,10 @@ async function main(): Promise<void> {
     "cross-chain",
     rows,
     path.join(import.meta.dirname, "results"),
+    collectRunMetadata(
+      { count, fresh, chains: chains.map((chain) => chain.name) },
+      startedAt,
+    ),
   );
   console.log(`Wrote ${jsonPath} and ${csvPath}`);
 }

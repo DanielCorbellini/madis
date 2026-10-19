@@ -7,7 +7,9 @@ import { Pool } from "pg";
 import {
   type AnchorableRecord,
   createDbPool,
+  collectRunMetadata,
   timed,
+  trackCpu,
   trackPeakMemory,
   writeResults,
 } from "service-runtime";
@@ -26,6 +28,9 @@ interface PerfRow {
   totalMs: number;
   rssPeakBytes: number;
   heapUsedPeakBytes: number;
+  cpuUserMs: number;
+  cpuSystemMs: number;
+  cpuPercent: number;
   // Every field above is a number — this index signature just makes that
   // explicit to TypeScript so PerfRow[] can be passed to writeResults's
   // Array<Record<string, unknown>> parameter without a cast.
@@ -75,6 +80,7 @@ async function benchmarkSize(
 
   const tracker = trackPeakMemory();
   tracker.sample();
+  const cpu = trackCpu();
   const totalStart = performance.now();
 
   const { result: records, ms: scanMs } = await timed(async () => {
@@ -132,6 +138,7 @@ async function benchmarkSize(
   tracker.sample();
 
   const totalMs = performance.now() - totalStart;
+  const { userMs, systemMs } = cpu.stop();
   const peak = tracker.peak();
 
   return {
@@ -143,10 +150,15 @@ async function benchmarkSize(
     totalMs: Math.round(totalMs),
     rssPeakBytes: peak.rssBytes,
     heapUsedPeakBytes: peak.heapUsedBytes,
+    cpuUserMs: Math.round(userMs),
+    cpuSystemMs: Math.round(systemMs),
+    cpuPercent:
+      totalMs > 0 ? Math.round(((userMs + systemMs) / totalMs) * 1000) / 10 : 0,
   };
 }
 
 async function main(): Promise<void> {
+  const startedAt = new Date();
   const { sizes } = parseCliArgs(process.argv.slice(2));
 
   const databaseUrl = process.env.DATABASE_URL;
@@ -180,6 +192,7 @@ async function main(): Promise<void> {
     "perf",
     rows,
     path.join(import.meta.dirname, "results"),
+    collectRunMetadata({ sizes }, startedAt),
   );
   console.log(`Wrote ${jsonPath} and ${csvPath}`);
 }
