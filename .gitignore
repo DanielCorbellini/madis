@@ -43,6 +43,9 @@ docker-compose.override.yml
 apps/anchor-service/bench/results/
 apps/monitor-service/bench/results/
 
+# Chart tool virtualenv (tools/bench-charts)
+tools/bench-charts/.venv/
+
 *.test.ts
 test-db.ts
 apps/anchor-service/test/wip-max-batch-size/cycle-deps.test.ts.bak

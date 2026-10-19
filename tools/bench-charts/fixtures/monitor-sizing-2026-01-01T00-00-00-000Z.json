@@ -1,0 +1,83 @@
+[
+  {
+    "m": 10,
+    "policy": "1h@1min",
+    "cyclesBudget": 60,
+    "passLength": 30,
+    "kRequired": 1,
+    "batchesPerCycle": 2,
+    "percentOfM": 20.0
+  },
+  {
+    "m": 10,
+    "policy": "1h@5min",
+    "cyclesBudget": 12,
+    "passLength": 6,
+    "kRequired": 2,
+    "batchesPerCycle": 3,
+    "percentOfM": 30.0
+  },
+  {
+    "m": 10,
+    "policy": "1d@5min",
+    "cyclesBudget": 288,
+    "passLength": 144,
+    "kRequired": 1,
+    "batchesPerCycle": 2,
+    "percentOfM": 20.0
+  },
+  {
+    "m": 100,
+    "policy": "1h@1min",
+    "cyclesBudget": 60,
+    "passLength": 30,
+    "kRequired": 4,
+    "batchesPerCycle": 5,
+    "percentOfM": 5.0
+  },
+  {
+    "m": 100,
+    "policy": "1h@5min",
+    "cyclesBudget": 12,
+    "passLength": 6,
+    "kRequired": 17,
+    "batchesPerCycle": 18,
+    "percentOfM": 18.0
+  },
+  {
+    "m": 100,
+    "policy": "1d@5min",
+    "cyclesBudget": 288,
+    "passLength": 144,
+    "kRequired": 1,
+    "batchesPerCycle": 2,
+    "percentOfM": 2.0
+  },
+  {
+    "m": 1000,
+    "policy": "1h@1min",
+    "cyclesBudget": 60,
+    "passLength": 30,
+    "kRequired": 34,
+    "batchesPerCycle": 35,
+    "percentOfM": 3.5
+  },
+  {
+    "m": 1000,
+    "policy": "1h@5min",
+    "cyclesBudget": 12,
+    "passLength": 6,
+    "kRequired": 167,
+    "batchesPerCycle": 168,
+    "percentOfM": 16.8
+  },
+  {
+    "m": 1000,
+    "policy": "1d@5min",
+    "cyclesBudget": 288,
+    "passLength": 144,
+    "kRequired": 7,
+    "batchesPerCycle": 8,
+    "percentOfM": 0.8
+  }
+]
