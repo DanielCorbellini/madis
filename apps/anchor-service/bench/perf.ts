@@ -1,5 +1,6 @@
 import { computeLeafHash, isWhitelistedAddress, verifyClientSignature } from "crypto-utils";
 import { Wallet } from "ethers";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Pool } from "pg";
@@ -8,11 +9,11 @@ import {
   createDbPool,
   timed,
   trackPeakMemory,
+  writeResults,
 } from "service-runtime";
 import { seedRecords, TEST_MNEMONIC, truncateAll } from "../scripts/seed-records.ts";
 import { streamUnanchoredRecords } from "../src/records-source.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
-import { writeResults } from "./report.ts";
 
 const DEFAULT_SIZES = [100, 1000, 10000, 100000, 1000000];
 
@@ -175,7 +176,11 @@ async function main(): Promise<void> {
     await pool.end();
   }
 
-  const { jsonPath, csvPath } = await writeResults("perf", rows);
+  const { jsonPath, csvPath } = await writeResults(
+    "perf",
+    rows,
+    path.join(import.meta.dirname, "results"),
+  );
   console.log(`Wrote ${jsonPath} and ${csvPath}`);
 }
 

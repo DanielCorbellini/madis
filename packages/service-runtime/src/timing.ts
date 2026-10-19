@@ -54,3 +54,19 @@ export function trackPeakMemory(
     },
   };
 }
+
+export interface CpuTime {
+  userMs: number;
+  systemMs: number;
+}
+
+/** CPU time this process spends between the call and `stop()`. */
+export function trackCpu(): { stop(): CpuTime } {
+  const start = process.cpuUsage();
+  return {
+    stop() {
+      const { user, system } = process.cpuUsage(start);
+      return { userMs: user / 1000, systemMs: system / 1000 };
+    },
+  };
+}

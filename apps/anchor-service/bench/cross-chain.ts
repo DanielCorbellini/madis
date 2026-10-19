@@ -1,12 +1,16 @@
 import { computeLeafHash } from "crypto-utils";
 import { formatEther } from "ethers";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { assertContractDeployed, assertNetworkMatches } from "service-runtime";
+import {
+  assertContractDeployed,
+  assertNetworkMatches,
+  writeResults,
+} from "service-runtime";
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
 import { submitRoot } from "../src/chain-submit.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
-import { writeResults } from "./report.ts";
 
 const DEFAULT_COUNT = 1000;
 const SUBMIT_RETRIES = 2;
@@ -299,7 +303,11 @@ async function main(): Promise<void> {
     console.log(row);
   }
 
-  const { jsonPath, csvPath } = await writeResults("cross-chain", rows);
+  const { jsonPath, csvPath } = await writeResults(
+    "cross-chain",
+    rows,
+    path.join(import.meta.dirname, "results"),
+  );
   console.log(`Wrote ${jsonPath} and ${csvPath}`);
 }
 
