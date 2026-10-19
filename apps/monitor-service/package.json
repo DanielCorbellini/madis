@@ -9,7 +9,8 @@
     "start": "node --import tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1",
-    "bench:detection": "tsx bench/detection.ts"
+    "bench:detection": "tsx bench/detection.ts",
+    "bench:perf": "tsx bench/perf.ts"
   },
   "dependencies": {
     "contracts-shared": "workspace:*",
