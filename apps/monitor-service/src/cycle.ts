@@ -245,6 +245,17 @@ export async function runMonitorCycle(
       confirmedIds: confirmed,
       escalated,
     });
+    logger.debug(
+      {
+        pass: selection.pass,
+        passPosition: selection.passPosition,
+        order: selection.order,
+        sliceIds: selection.sliceIds,
+        newIds: selection.newIds,
+        spotIds: selection.spotIds,
+      },
+      "sampling order",
+    );
 
     return {
       auditIds: escalated

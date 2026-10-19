@@ -16,6 +16,7 @@ export interface CycleSelection {
   pass: number; // 0 until the first shuffle
   passPosition: number; // cursor after this cycle's take
   passLength: number; // order.length
+  order: number[]; // copy of the pass order; ids before passPosition are visited
 }
 
 export interface AuditSelector {
@@ -64,6 +65,7 @@ export function createAuditSelector(options: {
     pass,
     passPosition: cursor,
     passLength: order.length,
+    order: [...order],
   });
 
   return {
