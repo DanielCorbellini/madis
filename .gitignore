@@ -41,6 +41,7 @@ docker-compose.override.yml
 
 # Benchmark result dumps (apps/anchor-service/bench/perf.ts, bench/cross-chain.ts)
 apps/anchor-service/bench/results/
+apps/monitor-service/bench/results/
 
 *.test.ts
 test-db.ts
