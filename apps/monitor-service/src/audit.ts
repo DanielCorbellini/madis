@@ -1,7 +1,7 @@
 import { computeMerkleRoot } from "crypto-utils";
 import type { MerkleAnchorRegistryLike } from "contracts-shared";
 import type { Pool } from "pg";
-import type { Logger } from "service-runtime";
+import { DEFAULT_MAX_BATCH_SIZE, type Logger } from "service-runtime";
 import {
   countAnchoredRecords as dbCountAnchoredRecords,
   streamAnchoredRecords as dbStreamAnchoredRecords,
@@ -12,7 +12,6 @@ import {
   recordTampered as dbRecordTampered,
 } from "./alerts.ts";
 import { checkAnchorCount } from "./anchor-count.ts";
-import { DEFAULT_ROOT_REBUILD_MAX_SIZE } from "./config.ts";
 import {
   computeRecordLeaf,
   verifyAnchoredRecord,
@@ -22,7 +21,7 @@ export interface AuditDeps {
   /**
    * Largest on-chain batch size whose root is rebuilt in memory (O(n) memory);
    * bigger batches are verified record by record, streaming in constant
-   * memory. Defaults to `DEFAULT_ROOT_REBUILD_MAX_SIZE`.
+   * memory. Defaults to `DEFAULT_MAX_BATCH_SIZE`.
    */
   rootRebuildMaxSize?: number;
   chain: {
@@ -30,9 +29,7 @@ export interface AuditDeps {
   };
   records: {
     countAnchoredRecords(batchId: number): Promise<number>;
-    streamAnchoredRecords(
-      batchId: number,
-    ): AsyncGenerator<AnchoredRecordEntry>;
+    streamAnchoredRecords(batchId: number): AsyncGenerator<AnchoredRecordEntry>;
   };
   alerts: {
     recordRootDivergence(
@@ -81,7 +78,7 @@ export async function auditBatch(
     await deps.alerts.recordRootDivergence(batchId, root, message);
   }
 
-  const rebuildLimit = deps.rootRebuildMaxSize ?? DEFAULT_ROOT_REBUILD_MAX_SIZE;
+  const rebuildLimit = deps.rootRebuildMaxSize ?? DEFAULT_MAX_BATCH_SIZE;
 
   if (anchorCountCheck.complete && size > rebuildLimit) {
     logger.debug(

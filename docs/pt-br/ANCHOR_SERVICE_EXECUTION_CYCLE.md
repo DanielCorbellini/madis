@@ -36,12 +36,12 @@ A única responsabilidade real do agendador, além de disparar o ciclo no horár
 Ao receber `SIGTERM` ou `SIGINT`, o processo não encerra imediatamente:
 
 1. O job do croner é parado (`cron.stop()`) — nenhum novo ciclo começará a partir deste ponto.
-2. Uma flag cooperativa de aborto é ativada. O ciclo *atualmente em execução*, se houver, lê essa flag em exatamente um checkpoint (ver Fase 4/5 abaixo) e, se estiver ativada, para de forma limpa em vez de iniciar uma transação na blockchain.
+2. Uma flag cooperativa de aborto é ativada. O ciclo *atualmente em execução*, se houver, lê essa flag em dois tipos de checkpoint (ver Fase 4/5 e o laço de lotes no §2 abaixo) e, se estiver ativada, para de forma limpa em vez de iniciar uma transação na blockchain ou outro lote.
 3. Se houver um ciclo em andamento, a sequência de encerramento espera por ele terminar — mas apenas até `SHUTDOWN_GRACE_MS` (padrão: 600.000 ms / 10 minutos, que precisa exceder confortavelmente a mais longa espera de confirmação realista).
 4. Se o ciclo em andamento termina dentro do período de tolerância, o pool do banco é fechado e o provider da chain é destruído, e o processo encerra de forma limpa.
 5. Se o período de tolerância se esgota primeiro (o ciclo está genuinamente travado — por exemplo, esperando por uma transação que nunca confirmará), o processo encerra abruptamente (_hard-exit_) com um código de saída diferente de zero, em vez de esperar indefinidamente ou arriscar um encerramento parcial sobre um ciclo travado.
 
-O checkpoint cooperativo de aborto é colocado em exatamente um ponto de todo o ciclo: logo após a Fase 4 (persistência) e antes da Fase 5 (submissão). Interromper qualquer fase anterior seria redundante, pois o `stop()` do croner já garante que nenhum *novo* ciclo comece; e qualquer fase posterior (submissão/confirmação) é deliberadamente deixada para rodar até o fim uma vez iniciada, de modo que uma transação nunca é abandonada no meio do caminho — ver Fase 6 para entender por que uma espera de confirmação interrompida ainda é segura.
+Os checkpoints cooperativos de aborto são colocados em exatamente dois pontos: logo após a Fase 4 (persistência) de um lote e antes da sua Fase 5 (submissão), e antes de o ciclo começar a ler a janela do próximo lote. Interromper qualquer fase anterior seria redundante, pois o `stop()` do croner já garante que nenhum *novo* ciclo comece; e qualquer fase posterior (submissão/confirmação) é deliberadamente deixada para rodar até o fim uma vez iniciada, de modo que uma transação nunca é abandonada no meio do caminho — ver Fase 6 para entender por que uma espera de confirmação interrompida ainda é segura.
 
 **SIGTERM durante um trecho intensivo de CPU.** A imagem inicia o serviço com `node --import tsx src/index.ts` (e não com a CLI do `tsx`, que executa um processo-pai supervisor que envia `SIGKILL` a um filho cujo _event loop_ não consegue confirmar um sinal repassado em cerca de 60 ms — código de saída 143, sem caminho gracioso; descoberto no plano E2E, §8). Com um processo `node` simples, um SIGTERM que chegue durante um longo trecho síncrono (a validação de assinaturas da Fase 1 sobre um backlog grande, a construção da Árvore de Merkle) é tratado assim que o _event loop_ volta a ficar livre: `shutdown requested` é registrado, o ciclo segue até o checkpoint entre as Fases 4 e 5, deixa o lote persistido como `pending` e encerra com código 0 — o encerramento leva o tempo restante do trecho, não zero. O override de desenvolvimento ainda usa `tsx watch`, que limita todo encerramento a 5 s.
 
@@ -54,30 +54,30 @@ Cada disparo agendado executa exatamente um ciclo de execução, implementado po
 ```mermaid
 flowchart TD
     Start(["Disparo agendado (croner)"]) --> P0["Fase 0 — Reconciliar lotes em andamento"]
-    P0 --> P1["Fase 1 — Varrer registros não ancorados"]
+    P0 --> P1["Fase 1 — Ler a próxima janela de registros não ancorados<br/>(no máximo ANCHOR_MAX_BATCH_SIZE)"]
     P1 --> P2["Fase 2 — Revalidar assinatura + whitelist"]
     P2 --> D1{"Algum registro válido?"}
-    D1 -- Não --> S1["Fase 7 — Resumo: nothing-to-anchor"]
+    D1 -- Não --> NEXT
     D1 -- Sim --> P3["Fase 3 — Construir Árvore de Merkle"]
     P3 --> D3{"Fase 3.5 — A raiz já existe<br/>on-chain sob algum lote?"}
-    D3 -- Sim --> S4["Fase 7 — Resumo: duplicate-skipped<br/>(nada persistido, alerta duplicate_root)"]
+    D3 -- Sim --> NEXT
     D3 -- Não --> P4["Fase 4 — Persistir lote (status: pending)"]
     P4 --> D2{"Encerramento solicitado?"}
-    D2 -- Sim --> S2["Fase 7 — Resumo: aborted<br/>(lote permanece pending)"]
+    D2 -- Sim --> S7
     D2 -- Não --> P5["Fase 5 — Submeter raiz on-chain"]
     P5 --> P6["Fase 6 — Aguardar confirmação"]
-    P6 --> S3["Fase 7 — Resumo: confirmed / submitted / failed"]
-    S1 --> End(["Ciclo termina"])
-    S4 --> End
-    S2 --> End
-    S3 --> End
+    P6 --> NEXT{"A janela estava cheia, o lote<br/>confirmou ou foi pulado,<br/>e não há encerramento solicitado?"}
+    NEXT -- Sim --> P1
+    NEXT -- Não --> S7["Fase 7 — Resumo de todos os lotes<br/>(confirmed / submitted / failed / duplicate-skipped /<br/>nothing-to-anchor / aborted)"]
+    S7 --> End(["Ciclo termina"])
 ```
 
 As mesmas fases, em formato de lista de texto simples:
 
 ```text
 Fase 0    Reconciliar lotes em andamento (deixados por um ciclo/crash anterior)
-Fase 1    Varrer registros ainda não ancorados
+  ┌─ repetido uma vez por janela de no máximo ANCHOR_MAX_BATCH_SIZE registros ─┐
+Fase 1    Ler a próxima janela de registros ainda não ancorados
 Fase 2    Revalidar cada registro (assinatura + whitelist)
 Fase 3    Construir a Árvore de Merkle
 Fase 3.5  Pular o lote se sua raiz já existir on-chain
@@ -85,10 +85,18 @@ Fase 4    Persistir o lote (de forma durável, antes de qualquer contato com a c
   ── checkpoint cooperativo de encerramento ──
 Fase 5    Submeter a raiz on-chain
 Fase 6    Aguardar confirmação
+  └────────────────────────────────────────────────────────────────────────────┘
 Fase 7    Montar e registrar o resumo do ciclo
 ```
 
-Se, após as Fases 1-2, restarem zero registros válidos para ancorar, o ciclo salta diretamente para a Fase 7 com um resumo do tipo `nothing-to-anchor` — as Fases 3-6 nunca são executadas, e nenhum lote vazio é jamais criado. Se a Fase 3.5 encontrar a raiz já registrada on-chain, o ciclo também termina antecipadamente, com um resumo `duplicate-skipped`, e não persiste nada.
+**Lotes de tamanho fixo.** Um ciclo não ancora todo o backlog como um único lote; ele o percorre em janelas de no máximo `ANCHOR_MAX_BATCH_SIZE` registros (padrão 100.000, o mesmo padrão que o `monitor-service` usa para seu limite de reconstrução da raiz), ancorando cada janela como um lote próprio. Com um milhão de registros não ancorados e um limite de 100.000, um ciclo produz até dez lotes, um após o outro, cada um com sua própria raiz, transação e confirmação. Detalhes:
+
+- **As janelas são lidas por id, uma consulta curta cada** (`id > <último id lido>`, no máximo o limite), e não por um único cursor mantido aberto durante todo o ciclo. A conexão com o banco de uma janela é liberada antes de o lote ser enviado à chain, de modo que uma confirmação lenta nunca prende uma conexão, e uma janela rejeitada, ou pulada como duplicata, é ultrapassada em vez de ser lida de novo.
+- **O limite conta registros varridos, não registros ancorados.** Um registro rejeitado na Fase 2 ocupa um lugar em sua janela, então uma janela com rejeitados produz um lote menor que o limite.
+- **O laço para** quando uma janela volta curta (o backlog acabou), quando um lote não termina limpo (qualquer coisa diferente de `confirmed` ou `duplicate-skipped` — os registros restantes apenas esperam o próximo ciclo, em vez de enviar mais transações para uma carteira com problema ou uma chain lenta), ou quando um encerramento é solicitado entre lotes.
+- **Um lote pulado como duplicata não interrompe o ciclo**: a janela seguinte continua.
+
+Se uma janela não tiver nenhum registro válido para ancorar, nenhum lote é criado para ela, e um backlog vazio salta diretamente para a Fase 7 com um resumo `nothing-to-anchor` — nenhum lote vazio é jamais criado. Se a Fase 3.5 encontrar a raiz de um lote já registrada on-chain, esse lote é pulado (`duplicate-skipped`) e nada é persistido para ele.
 
 ### Fase 0 — Reconciliar Lotes em Andamento
 
@@ -110,11 +118,11 @@ Implementada por `reconcileBatches` (`src/reconcile.ts`). Para cada lote em anda
 
 Esse design implica que o sistema **não possui abandono automático de lotes**: um lote que pode ser re-tentado com segurança continua sendo re-tentado a cada ciclo, indefinidamente, até que ou tenha sucesso ou receba intervenção manual; um que não pode ser reconciliado com segurança permanece `failed` e é reexaminado a cada ciclo, com seu único alerta já escrito, até que um humano intervenha.
 
-### Fase 1 — Varrer Registros Ainda Não Ancorados
+### Fase 1 — Ler a Próxima Janela de Registros Ainda Não Ancorados
 
-**Responsabilidade:** encontrar todo registro que ainda não foi ancorado.
+**Responsabilidade:** encontrar a próxima fatia de registros que ainda não foram ancorados.
 
-Implementada por `streamUnanchoredRecords` (`src/records-source.ts`): uma única consulta SQL seleciona toda linha em `records` que não possui uma linha correspondente em `anchor_records` (`NOT EXISTS`), ordenada por `id`. A consulta é executada como um **stream** (`pg-query-stream`), buscando linhas em lotes de 10.000 por padrão, de modo que o consumo de memória do daemon fica limitado pelo tamanho de um único lote de busca, e não pelo número total de registros não ancorados — isso importa porque a varredura pode precisar lidar com um volume acumulado potencialmente muito grande.
+Implementada por `streamUnanchoredRecords` (`src/records-source.ts`): uma única consulta SQL seleciona as linhas de `records` com id maior que o último já lido e sem linha correspondente em `anchor_records` (`NOT EXISTS`), ordenadas por `id` e limitadas a `ANCHOR_MAX_BATCH_SIZE`. A consulta é executada como um **stream** (`pg-query-stream`), buscando linhas em lotes de 10.000 por padrão, de modo que o daemon nunca mantém em memória, de uma só vez, os registros brutos da janela — apenas as folhas dos registros que passam na validação. Sua conexão é liberada assim que a janela foi lida, antes de qualquer coisa ser enviada à chain.
 
 ### Fase 2 — Revalidar Cada Registro
 
@@ -137,7 +145,7 @@ Todo registro que falha em qualquer uma delas é:
 
 Implementada por `buildAnchorTree` (`src/tree.ts`), um wrapper fino sobre o `buildMerkleTree` de `packages/crypto-utils` — a fonte única da verdade para essa lógica em todo o sistema, mantida byte-a-byte compatível com a própria verificação de provas baseada em OpenZeppelin do contrato `MerkleAnchorRegistry.sol` (ver [`ARCHITECTURE.md`](ARCHITECTURE.md) §5). A ordem de entrada é irrelevante: a biblioteca ordena as folhas por hash, e é por isso que o schema não tem uma coluna `leaf_index`. Se a Fase 2 rejeitou todos os registros e nenhum restou, a Fase 3 nunca chega a executar — o ciclo salta diretamente para um resumo `nothing-to-anchor` (Fase 7) em vez de chamar o construtor da árvore com uma entrada vazia.
 
-**Memória.** A árvore e todas as provas são materializadas de uma só vez, o que custa cerca de 2,5 KB por folha (medido: aproximadamente +257 MB e 29 s para 100.000 folhas, +756 MB e 96 s para 300.000), de modo que um backlog muito grande é a principal forma de este daemon ficar sem memória. `ANCHOR_MAX_BATCH_SIZE` é lida e validada por `loadConfig`, mas esta versão ainda não divide um backlog em lotes limitados (esse trabalho está na branch `anchor-max-batch-size`); por enquanto, a variável é lida apenas pelo `monitor-service`, como o tamanho até o qual ele reconstrói a raiz de um lote em memória.
+**Memória.** A árvore e todas as provas são materializadas de uma só vez, o que custa cerca de 2,5 KB por folha (medido: aproximadamente +257 MB e 29 s para 100.000 folhas, +756 MB e 96 s para 300.000). É isso que `ANCHOR_MAX_BATCH_SIZE` limita: a árvore é construída por janela, nunca sobre todo o backlog, então a memória cresce com o limite e não com o tamanho do backlog. O `monitor-service` lê a mesma variável como o tamanho até o qual ele reconstrói a raiz de um lote em memória, o que é seguro porque nenhum lote é jamais maior que o limite.
 
 ### Fase 3.5 — Pular uma Raiz que Já Existe On-Chain
 
@@ -196,12 +204,15 @@ Implementada por `awaitConfirmation` (`src/chain-confirm.ts`), bloqueando até q
 
 Implementada por `buildCycleSummary` (`src/metrics.ts`). Todo ciclo — tenha ele ancorado um lote, não encontrado nada para ancorar, sido abortado por encerramento, ou falhado — termina emitindo exatamente um resumo estruturado, contendo:
 
-- o número do ciclo e seu `status` final (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `duplicate-skipped` | `aborted`);
+- o número do ciclo e seu `status` final (`confirmed` | `submitted` | `failed` | `nothing-to-anchor` | `duplicate-skipped` | `aborted`), consolidado a partir dos lotes do ciclo — o primeiro lote que não terminou limpo decide (um lote `pending` deixado por um encerramento vale como `aborted`); caso contrário, `confirmed` se algo foi ancorado, `duplicate-skipped` se todo lote era duplicata, `nothing-to-anchor` se não houve nenhum;
+- `batches`: uma entrada por lote que o ciclo executou (`root`, `size`, `status` — `confirmed` | `submitted` | `failed` | `duplicate-skipped` | `pending` —, `txHash`, `blockNumber`, `gasUsed`, `gasPrice` e seu próprio `stageMs`); os campos de topo `root`, `txHash`, `blockNumber`, `gasUsed` e `gasPrice` espelham o último deles, de modo que um ciclo de um único lote se lê exatamente como antes;
 - as contagens de reconciliação da Fase 0 (lotes `confirmed`/`resent`/`failed` resolvidos naquele ciclo);
-- quantos registros foram varridos e quantos foram rejeitados na Fase 2;
-- quantos registros acabaram no lote, sua raiz, o hash de sua transação, o número de seu bloco, e o gas usado e o preço do gas (o que se aplicar ao resultado daquele ciclo — a maioria é `null` em um ciclo `nothing-to-anchor`);
-- uma decomposição do tempo em milissegundos por estágio (`reconcile`, `scanAndValidate`, `tree`, `duplicateCheck`, `persist`, `submit`, `confirm` — os que tiverem sido executados), de modo que um ciclo lento possa ser diagnosticado identificando qual estágio específico consumiu o tempo, e a duração total do ciclo;
+- quantos registros foram varridos e quantos foram rejeitados na Fase 2, somando todas as janelas (são contagens reais mesmo quando nada foi ancorado);
+- quantos registros acabaram em lotes (`batched`, sem contar os pulados como duplicata) e os dados de chain do último lote (o que se aplicar ao resultado daquele ciclo — a maior parte é `null` em um ciclo `nothing-to-anchor`);
+- uma decomposição do tempo em milissegundos por estágio (`reconcile`, `scanAndValidate`, `tree`, `duplicateCheck`, `persist`, `submit`, `confirm` — os que tiverem sido executados, somados entre os lotes do ciclo), de modo que um ciclo lento possa ser diagnosticado identificando qual estágio específico consumiu o tempo, e a duração total do ciclo;
 - uma captura de memória de pico (RSS), para detectar crescimento de memória proveniente de varreduras muito grandes antes que isso se torne um problema operacional.
+
+Um ciclo longo, com vários lotes, também registra uma linha `batch processed` à medida que cada lote termina, para que o progresso seja visível antes do resumo final.
 
 Esse resumo é a única saída estruturada e processável por máquina que o daemon produz sobre seu próprio comportamento — é o que um operador (ou o conjunto de benchmarks em `apps/anchor-service/bench/`) leria para entender o que um determinado ciclo de fato fez.
 
@@ -264,6 +275,6 @@ Obrigatórias: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID`, `ANCHOR_PRIVATE_KEY
 | `ANCHOR_MAX_FEE_GWEI` | `100` | Teto do aumento progressivo de taxa (Fase 5, e a substituição da Fase 0). |
 | `ANCHOR_TX_RETRIES` | `4` | Tentativas do `p-retry` ao enviar uma transação. |
 | `ANCHOR_RETRY_ALERT_THRESHOLD` | `5` | Contagem de tentativas em que um lote `failed` registra um erro de alto destaque de "lote envenenado" (Fase 0). |
-| `ANCHOR_MAX_BATCH_SIZE` | não definido | Lida e validada, **ainda não aplicada** por este daemon (ver Fase 3). O `monitor-service` a reutiliza como seu limite de reconstrução da raiz. |
+| `ANCHOR_MAX_BATCH_SIZE` | `100000` | Máximo de registros varridos para um lote; um backlog maior é dividido em vários lotes dentro do mesmo ciclo (§2). Precisa ser um inteiro positivo. O `monitor-service` a reutiliza como seu limite de reconstrução da raiz. |
 | `SHUTDOWN_GRACE_MS` | `600000` | Período de tolerância para um ciclo em andamento no encerramento (§1.3). |
 | `LOG_LEVEL` | `info` | Nível de log do pino. |

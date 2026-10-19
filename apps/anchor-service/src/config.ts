@@ -1,7 +1,11 @@
 import { resolveContractAddress } from "contracts-shared";
 import "dotenv/config";
 import { isAddress, isHexString } from "ethers";
-import { integerEnv, requiredEnv } from "service-runtime";
+import {
+  DEFAULT_MAX_BATCH_SIZE,
+  integerEnv,
+  requiredEnv,
+} from "service-runtime";
 
 export interface AnchorConfig {
   databaseUrl: string;
@@ -16,7 +20,7 @@ export interface AnchorConfig {
   maxFeeGwei: number;
   txRetries: number;
   retryAlertThreshold: number;
-  maxBatchSize: number | null;
+  maxBatchSize: number;
   shutdownGraceMs: number;
   logLevel: string;
 }
@@ -55,19 +59,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
     }
   }
 
-  const maxBatchSizeRaw = env.ANCHOR_MAX_BATCH_SIZE;
-  let maxBatchSize: number | null = null;
-
-  if (maxBatchSizeRaw !== undefined && maxBatchSizeRaw !== "") {
-    maxBatchSize = Number(maxBatchSizeRaw);
-
-    if (!Number.isInteger(maxBatchSize) || maxBatchSize <= 0) {
-      throw new Error(
-        `ANCHOR_MAX_BATCH_SIZE must be a positive integer, received: ${maxBatchSizeRaw}`,
-      );
-    }
-  }
-
   return {
     databaseUrl,
     rpcUrl,
@@ -88,7 +79,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
     retryAlertThreshold: integerEnv(env, "ANCHOR_RETRY_ALERT_THRESHOLD", 5, {
       min: 1,
     }),
-    maxBatchSize,
+    maxBatchSize: integerEnv(
+      env,
+      "ANCHOR_MAX_BATCH_SIZE",
+      DEFAULT_MAX_BATCH_SIZE,
+      { min: 1 },
+    ),
     shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 600_000, { min: 0 }),
     logLevel: env.LOG_LEVEL || "info",
   };

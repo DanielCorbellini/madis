@@ -1,8 +1,12 @@
 import { resolveContractAddress } from "contracts-shared";
 import "dotenv/config";
-import { integerEnv, requiredEnv } from "service-runtime";
+import {
+  DEFAULT_MAX_BATCH_SIZE,
+  integerEnv,
+  requiredEnv,
+} from "service-runtime";
 
-export const DEFAULT_ROOT_REBUILD_MAX_SIZE = 100_000;
+export type AuditMode = "full" | "sampling";
 
 export interface MonitorConfig {
   databaseUrl: string;
@@ -13,8 +17,47 @@ export interface MonitorConfig {
   rpcRetries: number;
   submittedStaleMs: number;
   rootRebuildMaxSize: number;
+  auditMode: AuditMode;
+  sampleSize: number;
+  spotChecks: number;
+  sampleSeed: string | undefined;
+  escalateOnAnomaly: boolean;
   shutdownGraceMs: number;
   logLevel: string;
+}
+
+function auditModeEnv(env: NodeJS.ProcessEnv): AuditMode {
+  const raw = env.MONITOR_AUDIT_MODE;
+
+  if (raw === undefined || raw === "") {
+    return "full";
+  }
+
+  if (raw !== "full" && raw !== "sampling") {
+    throw new Error(
+      `MONITOR_AUDIT_MODE must be "full" or "sampling", received: ${raw}`,
+    );
+  }
+
+  return raw;
+}
+
+function booleanEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const raw = env[key];
+
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+
+  if (raw !== "true" && raw !== "false") {
+    throw new Error(`${key} must be "true" or "false", received: ${raw}`);
+  }
+
+  return raw === "true";
 }
 
 /**
@@ -66,9 +109,14 @@ export function loadConfig(
     rootRebuildMaxSize: integerEnv(
       env,
       "ANCHOR_MAX_BATCH_SIZE",
-      DEFAULT_ROOT_REBUILD_MAX_SIZE,
+      DEFAULT_MAX_BATCH_SIZE,
       { min: 1 },
     ),
+    auditMode: auditModeEnv(env),
+    sampleSize: integerEnv(env, "MONITOR_SAMPLE_SIZE", 10, { min: 1 }),
+    spotChecks: integerEnv(env, "MONITOR_SPOT_CHECKS", 1, { min: 0 }),
+    sampleSeed: env.MONITOR_SAMPLE_SEED || undefined,
+    escalateOnAnomaly: booleanEnv(env, "MONITOR_ESCALATE_ON_ANOMALY", true),
     shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 30_000, { min: 0 }),
     logLevel: env.LOG_LEVEL || "info",
   };

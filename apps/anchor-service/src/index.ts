@@ -113,6 +113,7 @@ export function createCycleScheduler(
     | "whitelistedAddresses"
     | "confirmations"
     | "confirmationTimeoutMs"
+    | "maxBatchSize"
   >,
   logger: Logger,
   shouldAbort: () => boolean,
@@ -133,6 +134,7 @@ export function createCycleScheduler(
             whitelistedAddresses: config.whitelistedAddresses,
             confirmations: config.confirmations,
             confirmationTimeoutMs: config.confirmationTimeoutMs,
+            maxBatchSize: config.maxBatchSize,
           },
           logger,
           shouldAbort,

@@ -189,7 +189,7 @@ Processo em lote executado periodicamente (ex: a cada 1 a 3 horas). Cada ciclo (
 1. **Reconciliação:** Resolve os lotes que um ciclo anterior deixou em andamento (`pending`, `submitted`, `failed`) antes de qualquer trabalho novo.
 2. **Varredura:** Busca registros em `records` que ainda não possuem entrada associada em `anchor_records`.
 3. **Validação Prévia:** Verifica se a assinatura digital (sobre todo o conteúdo assinável do registro) corresponde ao signatário e se o signatário está na whitelist. Se não, emite alerta `signature_mismatch` e descarta o registro do lote.
-4. **Construção da Árvore:** Gera as folhas $L_i$, computa a Raiz de Merkle e extrai o `merkle_proof` de cada folha.
+4. **Construção da Árvore:** Gera as folhas $L_i$, computa a Raiz de Merkle e extrai o `merkle_proof` de cada folha. Um backlog grande é dividido em lotes de no máximo `ANCHOR_MAX_BATCH_SIZE` registros (padrão 100.000), cada um ancorado como um lote próprio no mesmo ciclo (os passos 5-7 se repetem por lote).
 5. **Guarda de Raiz Duplicada:** Se a raiz já existe on-chain, não persiste nada e emite um alerta `duplicate_root`.
 6. **Persistência do Lote:** Em uma única transação, insere o lote (status `pending`) na tabela `batches` e persiste as provas individuais em `anchor_records`.
 7. **Transação On-Chain:** Invoca `MerkleAnchorRegistry.addMerkleRoot(root, size, batchId)` na rede descentralizada e aguarda a confirmação, após a qual o lote passa a `confirmed`.
