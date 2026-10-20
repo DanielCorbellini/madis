@@ -227,3 +227,49 @@ Obrigatórias: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/
 | `MONITOR_ESCALATE_ON_ANOMALY` | `true` | Apenas no modo sampling: `true`/`false`. Se um ciclo que detectou uma anomalia faz do próximo uma revarredura completa. A inicialização avisa se `false`. |
 | `SHUTDOWN_GRACE_MS` | `30000` | Período de tolerância para um ciclo em andamento no encerramento (§1.4). |
 | `LOG_LEVEL` | `info` | Nível de log do pino. |
+
+## 6. Benchmarks
+
+Três ferramentas produzem a evidência do trade-off da amostragem para o TCC. Todas escrevem `<prefixo>-<timestamp>.{json,csv,meta.json}` em `apps/monitor-service/bench/results/` (ignorado pelo git); o `.meta.json` registra a máquina (CPU, núcleos, RAM, SO, Node), o commit git e as opções da execução. Design: `docs/superpowers/specs/2026-10-18-monitor-benchmarks-design.md`.
+
+### 6.1 Benchmark de custo — `bench:perf`
+
+Mede tempo por ciclo, CPU e pico de memória da varredura completa vs amostragem (k = 3, e o k que garante pior caso de 1 hora com cron de 1 minuto, k = ⌈M/30⌉), com M = 10, 100 e 1.000 lotes de 1.000 registros. Executa o ciclo real (leituras reais no Postgres, hashing e chamadas à chain) sobre uma visão que só enxerga os primeiros M lotes ancorados, então uma única preparação serve a todos os tamanhos. Cada (M, configuração) roda em um processo filho próprio, para que o pico de memória não vaze entre eles.
+
+Preparação, uma vez, **com os dois daemons parados** (`docker compose stop anchor-service monitor-service`):
+
+1. Chain nova e banco vazio: `docker compose --profile local down -v`, depois `docker compose --profile local up -d postgres hardhat-node`. Uma raiz sobrando na chain (por exemplo, deixada pelo `bench:cross-chain` do anchor) invalidaria a execução.
+2. `pnpm --filter anchor-service seed --count 1000000 --type prescription --truncate`
+3. Um ciclo do anchor com `ANCHOR_MAX_BATCH_SIZE=1000` (1.000 lotes confirmados).
+
+**Rode o `bench:perf` do anchor antes desta preparação, nunca depois: ele trunca o banco.**
+
+Execução (a partir de `apps/monitor-service`, com `DATABASE_URL` apontando para `localhost:5433`):
+
+```bash
+DATABASE_URL=<DSN do app_user @localhost:5433> RPC_URL=http://localhost:8545 ANCHOR_CHAIN_ID=31337 \
+  pnpm bench:perf [--batches 10,100,1000] [--batch-size 1000] [--full-cycles 3] [--sampling-cycles 10] [--seed bench-1]
+```
+
+Ele se recusa a começar se houver menos de max(M) lotes ancorados, se o tamanho dos lotes na chain for diferente de `--batch-size`, ou se algum desses lotes não estiver `confirmed` no Postgres — e imprime os comandos de preparação. Um ciclo que dispare alerta ou escale invalida a execução (os dados não estão limpos); se uma célula falhar, as linhas já medidas são gravadas mesmo assim e o `.meta.json` registra `incomplete`, a célula que falhou e o erro. Conte com cerca de 30 minutos, a maior parte nas varreduras completas com 1.000 lotes. Rode duas vezes e confira que concordam antes de gerar o gráfico de uma delas.
+
+### 6.2 Simulação da latência de detecção — `bench:detection`
+
+```bash
+pnpm --filter monitor-service bench:detection [--trials 10000] [--trials-large 1000] [--seed bench-1]
+```
+
+Usa o seletor real (`createAuditSelector`) sem banco e sem chain: cada tentativa adultera um lote aleatório em um ponto aleatório de uma passada e conta os ciclos até ele ser auditado, para M ∈ {10, 100, 1000}, k ∈ {1, 3, 4, 10, 34, 100}, j ∈ {0, 1}, comparando com uma linha de base de sorteio independente a cada ciclo. Células com passada maior que 100 ciclos usam `--trials-large`. Saída: `monitor-detection` (média, p50, p95 e máximo ao lado do pior caso teórico 2L − 1, da média contínua 7L/12 e da média discreta exata, calculada com os tamanhos reais das fatias — (7L − 1)(L + 1)/(12L) quando k divide M) e `monitor-sizing` (k necessário por M para 1 h @ 1 min, 1 h @ 5 min e 1 dia @ 5 min). Sai com código diferente de zero se alguma tentativa da passada embaralhada passar do limite de segurança. A execução completa com os padrões leva cerca de 15 minutos.
+
+### 6.3 Gráficos
+
+```bash
+tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/monitor-service/bench/results
+tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/anchor-service/bench/results [--file <execução mais antiga>]
+```
+
+Gera PNGs (rótulos em português) em `<diretório-de-resultados>/charts/` a partir da execução mais recente de cada tipo e imprime uma legenda sugerida por gráfico. Preparação e detalhes: `tools/bench-charts/README.md`.
+
+### 6.4 Verificação ao vivo (manual)
+
+Para mostrar que a simulação corresponde ao daemon real: rode-o com `MONITOR_AUDIT_MODE=sampling`, `MONITOR_ESCALATE_ON_ANOMALY=false` e `LOG_LEVEL=debug` (a linha `sampling order` mostra a passada), adultere um registro (`pnpm --filter anchor-service tamper edit-record …`), anote o ciclo e conte os ciclos até o alerta `record_tampered`. Algumas execuções devem cair dentro da distribuição simulada e nunca além de 2L − 1.
