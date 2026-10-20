@@ -37,7 +37,11 @@ export interface PerfOptions {
   fullCycles: number;
   samplingCycles: number;
   seed: string;
+  /** Log level of the measured cells; "warn" keeps logging out of the timings. */
+  logLevel: string;
 }
+
+const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"];
 
 type Row = Record<string, unknown>;
 
@@ -50,6 +54,14 @@ function positiveInt(raw: string | undefined, flag: string, fallback: number): n
   return value;
 }
 
+function logLevel(raw: string | undefined): string {
+  if (raw === undefined) return "warn";
+  if (!LOG_LEVELS.includes(raw)) {
+    throw new Error(`--log-level must be one of ${LOG_LEVELS.join(", ")}, received: ${raw}`);
+  }
+  return raw;
+}
+
 export function parsePerfArgs(argv: string[]): PerfOptions & { cell: CellSpec | null } {
   const { values } = parseArgs({
     args: argv,
@@ -59,6 +71,7 @@ export function parsePerfArgs(argv: string[]): PerfOptions & { cell: CellSpec | 
       "full-cycles": { type: "string" },
       "sampling-cycles": { type: "string" },
       seed: { type: "string" },
+      "log-level": { type: "string" },
       cell: { type: "string" },
     },
   });
@@ -73,6 +86,7 @@ export function parsePerfArgs(argv: string[]): PerfOptions & { cell: CellSpec | 
     fullCycles: positiveInt(values["full-cycles"], "--full-cycles", 3),
     samplingCycles: positiveInt(values["sampling-cycles"], "--sampling-cycles", 10),
     seed: values.seed ?? "bench-1",
+    logLevel: logLevel(values["log-level"]),
     cell: values.cell === undefined ? null : (JSON.parse(values.cell) as CellSpec),
   };
 }
@@ -156,6 +170,42 @@ export function checkPrerequisites(input: {
   return problems;
 }
 
+interface CycleCheck {
+  escalated: boolean;
+  alertsFired: number;
+  batchesChecked: number;
+  batchesComplete: number;
+  recordsChecked: number;
+  sampling?: { sampledCount: number; newCount: number; spotCount: number };
+}
+
+/**
+ * Why a measured cycle can't be trusted, or null. Beyond alerts, a cycle that
+ * skipped a batch (e.g. an RPC timeout logged as "skipping") would look cheaper.
+ */
+export function checkCycleSummary(
+  summary: CycleCheck,
+  cell: CellSpec,
+  batchSize: number,
+): string | null {
+  if (summary.escalated) return "the cycle escalated to a full rescan";
+  if (summary.alertsFired > 0) return `the cycle raised ${summary.alertsFired} alert(s)`;
+
+  const expected = summary.sampling
+    ? summary.sampling.sampledCount + summary.sampling.newCount + summary.sampling.spotCount
+    : cell.m;
+  if (summary.batchesChecked !== expected) {
+    return `audited ${summary.batchesChecked} batches, expected ${expected}`;
+  }
+  if (summary.batchesComplete !== summary.batchesChecked) {
+    return `only ${summary.batchesComplete} of ${summary.batchesChecked} batches were complete`;
+  }
+  if (summary.recordsChecked !== summary.batchesChecked * batchSize) {
+    return `checked ${summary.recordsChecked} records, expected ${summary.batchesChecked * batchSize}`;
+  }
+  return null;
+}
+
 /** Runs cells in order; stops at the first failure but keeps the rows gathered so far. */
 export async function runCells(
   cells: CellSpec[],
@@ -197,6 +247,8 @@ function runCellInChild(cell: CellSpec, options: PerfOptions): Promise<Row[]> {
       String(options.batchSize),
       "--seed",
       options.seed,
+      "--log-level",
+      options.logLevel,
     ]);
     let rows: Row[] | null = null;
 
@@ -213,7 +265,7 @@ function runCellInChild(cell: CellSpec, options: PerfOptions): Promise<Row[]> {
 
 async function runChild(cell: CellSpec, options: PerfOptions): Promise<void> {
   const config = loadConfig();
-  const logger = createLogger("warn");
+  const logger = createLogger(options.logLevel);
   const pool = createDbPool(config.databaseUrl);
   const chain = createReadOnlyChainClient(config);
 
@@ -243,9 +295,10 @@ async function runChild(cell: CellSpec, options: PerfOptions): Promise<void> {
 
     const runValidCycle = async (cycle: number) => {
       const summary = await runMonitorCycle(narrowed, cycle, logger);
-      if (summary.escalated || summary.alertsFired > 0) {
+      const problem = checkCycleSummary(summary, cell, options.batchSize);
+      if (problem) {
         throw new Error(
-          `invalid run: cycle ${cycle} of ${JSON.stringify(cell)} escalated or raised alerts — the data isn't clean (${JSON.stringify(summary)})`,
+          `invalid run: cycle ${cycle} of ${JSON.stringify(cell)}: ${problem} (${JSON.stringify(summary)})`,
         );
       }
       return summary;

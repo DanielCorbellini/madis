@@ -59,11 +59,13 @@ export function collectRunMetadata(
   };
 }
 
+// RFC 4180: quote a cell holding a comma, quote or line break, doubling its quotes.
 function toCsvCell(value: unknown): string {
   if (value === null || value === undefined) {
     return "";
   }
-  return String(value);
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 /**

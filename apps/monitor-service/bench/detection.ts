@@ -98,17 +98,26 @@ export function runTrial(cell: Cell, randomInt: RandomInt): TrialResult {
 }
 
 /**
- * Exact mean detection cycles for a pass of `pass` cycles, j = 0: tampering
- * lands after a uniform number of the pass's cycles, at a uniform slot.
+ * Exact mean detection cycles, j = 0: tampering lands after a uniform number of
+ * the pass's cycles, on a batch audited in cycle c with probability n_c / m
+ * (k per cycle, the remainder in the last). (7L − 1)(L + 1)/(12L) when k divides m.
  */
-export function theoryMeanDiscrete(pass: number): number {
+export function theoryMeanDiscrete(m: number, k: number): number {
+  const pass = passLength(m, k);
+  const share = (cycle: number) => (cycle < pass ? k : m - k * (pass - 1)) / m;
+
+  let nextPassMean = 0;
+  for (let cycle = 1; cycle <= pass; cycle++) nextPassMean += cycle * share(cycle);
+
   let total = 0;
   for (let done = 0; done < pass; done++) {
-    const left = pass - done;
-    // Unvisited slot: wait 1..left. Visited slot: rest of this pass + a slot in the next.
-    total += (left * (left + 1)) / 2 + done * (left + (pass + 1) / 2);
+    for (let cycle = 1; cycle <= pass; cycle++) {
+      // Not yet audited this pass: wait for its cycle. Already audited: rest of the pass + the next.
+      const wait = cycle > done ? cycle - done : pass - done + nextPassMean;
+      total += share(cycle) * wait;
+    }
   }
-  return total / (pass * pass);
+  return total / pass;
 }
 
 // Nearest-rank percentile over an ascending-sorted array.
@@ -137,7 +146,7 @@ export function summarizeCell(
     theoryWorst: 2 * pass - 1,
     theoryMean: cell.j === 0 ? Math.round((7 / 12) * pass * 100) / 100 : "",
     theoryMeanDiscrete:
-      cell.j === 0 ? Math.round(theoryMeanDiscrete(pass) * 100) / 100 : "",
+      cell.j === 0 ? Math.round(theoryMeanDiscrete(cell.m, cell.k) * 100) / 100 : "",
     costBatchesPerCycle: cell.k + cell.j,
   };
 }

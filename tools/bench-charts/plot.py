@@ -98,16 +98,23 @@ def find_runs(results_dir: Path, pinned: list[Path]) -> dict[str, Path]:
     return chosen
 
 
-def machine_line(stem: Path) -> str:
+def read_meta(stem: Path) -> dict:
     meta_path = Path(f"{stem}.meta.json")
-    if not meta_path.exists():
+    return json.loads(meta_path.read_text()) if meta_path.exists() else {}
+
+
+def machine_line(stem: Path) -> str:
+    meta = read_meta(stem)
+    if not meta:
         return ""
-    meta = json.loads(meta_path.read_text())
     gib = meta.get("totalMemBytes", 0) / 2**30
     commit = meta.get("gitCommit") or "?"
     dirty = " (com alterações locais)" if meta.get("gitDirty") else ""
-    return (f" Máquina: {meta.get('cpuModel')} ({meta.get('cpuCores')} núcleos), "
+    line = (f" Máquina: {meta.get('cpuModel')} ({meta.get('cpuCores')} núcleos), "
             f"{gib:.0f} GiB de RAM, Node {meta.get('nodeVersion')}; commit {commit}{dirty}.")
+    if meta.get("incomplete"):
+        line += f" ATENÇÃO: execução incompleta (falhou em {json.dumps(meta.get('failedCell'))})."
+    return line
 
 
 # ---------- helpers ----------
@@ -190,14 +197,17 @@ def monitor_perf(rows, out_dir, stem):
     if len({r["m"] for r in rows}) < 2:
         return note("monitor-perf", "menos de 2 valores de M")
     batch = rows[0].get("batchSize")
+    # With fewer than 20 cycles per point, nearest-rank p95 is just the maximum.
+    cycles = min(len(group) for series in by_config(rows).values() for group in series.values())
+    spread = "p95" if cycles >= 20 else "máximo"
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
     config_lines(ax, rows, lambda r: r["durationMs"] / 1000)
-    ax.set_ylabel("Tempo por ciclo (s, mediana; barra = p95)")
+    ax.set_ylabel(f"Tempo por ciclo (s, mediana; barra = {spread})")
     ax.set_title("Custo por ciclo do monitor: varredura completa vs amostragem")
     save(fig, out_dir, "monitor-custo-tempo.png",
          f"Tempo por ciclo do monitor em função do número de lotes ({batch} registros por lote). "
-         "Mediana dos ciclos medidos; a barra indica o p95.", stem)
+         f"Mediana de {cycles} ou mais ciclos medidos por ponto; a barra indica o {spread}.", stem)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: (r["cpuUserMs"] + r["cpuSystemMs"]) / 1000)
@@ -392,11 +402,20 @@ def main() -> None:
     style()
 
     runs = find_runs(args.results_dir, args.file)
+    pinned = {path.with_suffix("") for path in args.file}
     for prefix in PREFIXES:
         stem = runs.get(prefix)
         if stem is None:
             note(prefix, "nenhum arquivo deste tipo no diretório")
             continue
+        meta = read_meta(stem)
+        if meta.get("incomplete"):
+            failed = json.dumps(meta.get("failedCell"))
+            if stem not in pinned:
+                note(prefix, f"{stem.name} é uma execução incompleta (falhou em {failed}); "
+                             "use --file para gerar os gráficos dela mesmo assim")
+                continue
+            print(f"[aviso] {prefix}: {stem.name} é uma execução incompleta (falhou em {failed})")
         rows = load_rows(stem)
         if not rows:
             note(prefix, f"{stem.name} não tem linhas")
