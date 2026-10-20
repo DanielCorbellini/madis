@@ -230,7 +230,7 @@ function setupHelp(options: PerfOptions): string {
   return [
     "Setup (spec §4.1), with both daemons stopped:",
     "  0. fresh Hardhat node + truncated database (e.g. docker compose --profile local down -v, then up postgres hardhat-node)",
-    `  1. pnpm --filter anchor-service seed --count ${options.batchSize * maxM} --type prescription --truncate`,
+    `  1. pnpm --filter anchor-service seed --count ${options.batchSize * maxM} --type prescription  (the volume reset leaves the database empty)`,
     `  2. run one anchor-service cycle with ANCHOR_MAX_BATCH_SIZE=${options.batchSize}`,
   ].join("\n");
 }
