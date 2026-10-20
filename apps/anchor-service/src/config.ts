@@ -22,6 +22,8 @@ export interface AnchorConfig {
   retryAlertThreshold: number;
   maxBatchSize: number;
   shutdownGraceMs: number;
+  /** How often ethers polls for a mined transaction; 4000 is its own default. */
+  pollingIntervalMs: number;
   logLevel: string;
 }
 
@@ -86,6 +88,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AnchorConfig {
       { min: 1 },
     ),
     shutdownGraceMs: integerEnv(env, "SHUTDOWN_GRACE_MS", 600_000, { min: 0 }),
+    pollingIntervalMs: integerEnv(env, "ANCHOR_POLLING_INTERVAL_MS", 4_000, {
+      min: 1,
+    }),
     logLevel: env.LOG_LEVEL || "info",
   };
 }
