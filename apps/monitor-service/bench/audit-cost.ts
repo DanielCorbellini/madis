@@ -9,6 +9,9 @@ import {
   createDbPool,
   DEFAULT_MAX_BATCH_SIZE,
   integerEnv,
+  parseBenchSizes,
+  parseRepeats,
+  repeatsFor,
   timed,
   toAnchorableRecord,
   trackCpu,
@@ -26,11 +29,16 @@ export interface AuditCostOptions {
   sizes: number[];
   /** ANCHOR_MAX_BATCH_SIZE: the largest batch the configured system anchors and rebuilds in memory. */
   maxBatchSize: number;
+  /** Timed repetitions per size, after one discarded warm-up. */
+  repeats: number;
+  /** Repetitions for sizes above LARGE_SIZE_THRESHOLD. */
+  repeatsLarge: number;
 }
 
 export interface AuditCell {
   n: number;
   batchId: number;
+  repeats: number;
 }
 
 export function parseAuditCostArgs(
@@ -41,29 +49,22 @@ export function parseAuditCostArgs(
     args: argv,
     options: {
       sizes: { type: "string" },
+      repeats: { type: "string" },
+      "repeats-large": { type: "string" },
       cell: { type: "string" },
     },
   });
 
-  const raw = values.sizes ?? "1000,10000,100000";
-  const sizes = raw.split(",").map((part) => Number(part.trim()));
-  if (sizes.some((n) => !Number.isInteger(n) || n <= 0)) {
-    throw new Error(`--sizes must be a comma-separated list of positive integers, received: ${raw}`);
-  }
-
   const maxBatchSize = integerEnv(env, "ANCHOR_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE, {
     min: 1,
   });
-  const tooBig = sizes.filter((n) => n > maxBatchSize);
-  if (tooBig.length > 0) {
-    throw new Error(
-      `size ${tooBig.join(", ")} is above the batch limit ${maxBatchSize}: the system never anchors or audits a batch that large. Set ANCHOR_MAX_BATCH_SIZE to at least ${Math.max(...tooBig)} to measure it as one batch.`,
-    );
-  }
+  const sizes = parseBenchSizes(values.sizes, maxBatchSize);
 
   return {
     sizes,
     maxBatchSize,
+    repeats: parseRepeats(values.repeats, "--repeats", 10),
+    repeatsLarge: parseRepeats(values["repeats-large"], "--repeats-large", 3),
     cell: values.cell === undefined ? null : (JSON.parse(values.cell) as AuditCell),
   };
 }
@@ -215,53 +216,75 @@ type Row = Record<string, unknown>;
 
 const SELF = fileURLToPath(import.meta.url);
 
-// Each size is timed in a fresh process: cold, with its own peak RSS (spec §4.1).
-function runCellInChild(cell: AuditCell, sizes: number[]): Promise<Row> {
+// Each size runs in its own process, so its peak RSS and JIT state don't leak into the next.
+function runCellInChild(cell: AuditCell, sizes: number[]): Promise<Row[]> {
   return new Promise((resolve, reject) => {
     const child = fork(SELF, ["--cell", JSON.stringify(cell), "--sizes", sizes.join(",")]);
-    let row: Row | null = null;
+    let rows: Row[] | null = null;
 
     child.on("message", (message) => {
-      row = message as Row;
+      rows = message as Row[];
     });
     child.on("error", reject);
     child.on("exit", (code) => {
-      if (code === 0 && row) resolve(row);
+      if (code === 0 && rows) resolve(rows);
       else reject(new Error(`size ${cell.n} exited with code ${code}`));
     });
   });
 }
 
+/** One size's timed pass, as the child runs it; throws if the rebuilt root doesn't match. */
+export async function measureCell(app: Pool, cell: AuditCell, expectedRoot: string): Promise<Row> {
+  // Open the connection first, so the timed read doesn't pay TCP + auth setup.
+  await app.query("SELECT 1");
+  const memory = trackPeakMemory();
+  const cpu = trackCpu();
+  memory.sample();
+  const timing = await timeAudit(app, cell.batchId, expectedRoot);
+  memory.sample();
+  const { userMs, systemMs } = cpu.stop();
+
+  if (!timing.rootMatches) {
+    throw new Error(`size ${cell.n}: rebuilt root doesn't match the stored one — the data changed after setup`);
+  }
+
+  return {
+    n: cell.n,
+    readMs: Math.round(timing.readMs),
+    leafMs: Math.round(timing.leafMs),
+    rootMs: Math.round(timing.rootMs),
+    totalMs: Math.round(timing.totalMs),
+    cpuUserMs: Math.round(userMs),
+    cpuSystemMs: Math.round(systemMs),
+    cpuPercent:
+      timing.totalMs > 0 ? Math.round(((userMs + systemMs) / timing.totalMs) * 1000) / 10 : 0,
+    rssPeakBytes: memory.peak().rssBytes,
+  };
+}
+
+/**
+ * Steady state, as the long-running daemon would be: one discarded warm-up
+ * pass, then `cell.repeats` timed passes in the same process.
+ */
+export async function measureRepetitions(
+  app: Pool,
+  cell: AuditCell,
+  expectedRoot: string,
+): Promise<Row[]> {
+  await measureCell(app, cell, expectedRoot);
+  const rows: Row[] = [];
+  for (let repetition = 1; repetition <= cell.repeats; repetition++) {
+    rows.push({ ...(await measureCell(app, cell, expectedRoot)), repetition });
+  }
+  return rows;
+}
+
 async function runChild(cell: AuditCell, expectedRoot: string): Promise<void> {
   const app = createDbPool(requireEnv("DATABASE_URL"));
   try {
-    const memory = trackPeakMemory();
-    const cpu = trackCpu();
-    memory.sample();
-    const timing = await timeAudit(app, cell.batchId, expectedRoot);
-    memory.sample();
-    const { userMs, systemMs } = cpu.stop();
-
-    if (!timing.rootMatches) {
-      throw new Error(`size ${cell.n}: rebuilt root doesn't match the stored one — the data changed after setup`);
-    }
-
-    const row: Row = {
-      n: cell.n,
-      readMs: Math.round(timing.readMs),
-      leafMs: Math.round(timing.leafMs),
-      rootMs: Math.round(timing.rootMs),
-      totalMs: Math.round(timing.totalMs),
-      cpuUserMs: Math.round(userMs),
-      cpuSystemMs: Math.round(systemMs),
-      cpuPercent:
-        timing.totalMs > 0
-          ? Math.round(((userMs + systemMs) / timing.totalMs) * 1000) / 10
-          : 0,
-      rssPeakBytes: memory.peak().rssBytes,
-    };
+    const rows = await measureRepetitions(app, cell, expectedRoot);
     await new Promise<void>((resolve, reject) =>
-      process.send!(row, (error: Error | null) => (error ? reject(error) : resolve())),
+      process.send!(rows, (error: Error | null) => (error ? reject(error) : resolve())),
     );
   } finally {
     await app.end();
@@ -312,9 +335,12 @@ async function main(): Promise<void> {
       const { batchId, root } = await setupBatch(admin, n);
       try {
         process.env.AUDIT_COST_EXPECTED_ROOT = root;
-        const row = await runCellInChild({ n, batchId }, options.sizes);
-        console.log(`  n=${n}: total ${row.totalMs} ms (read ${row.readMs}, leaves ${row.leafMs}, root ${row.rootMs})`);
-        rows.push(row);
+        const repeats = repeatsFor(n, options.repeats, options.repeatsLarge);
+        const sizeRows = await runCellInChild({ n, batchId, repeats }, options.sizes);
+        const totals = sizeRows.map((row) => row.totalMs as number);
+        const mean = totals.reduce((sum, ms) => sum + ms, 0) / totals.length;
+        console.log(`  n=${n}: ${repeats} repetitions, mean total ${Math.round(mean)} ms (${totals.join(", ")})`);
+        rows.push(...sizeRows);
       } catch (error) {
         failure = { n, error: error instanceof Error ? error.message : String(error) };
         break;

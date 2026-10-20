@@ -1,13 +1,19 @@
 import { computeLeafHash, isWhitelistedAddress, verifyClientSignature } from "crypto-utils";
 import { Wallet } from "ethers";
+import { fork } from "node:child_process";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Pool } from "pg";
 import {
   type AnchorableRecord,
   createDbPool,
   collectRunMetadata,
+  DEFAULT_MAX_BATCH_SIZE,
+  integerEnv,
+  parseBenchSizes,
+  parseRepeats,
+  repeatsFor,
   timed,
   trackCpu,
   trackPeakMemory,
@@ -16,8 +22,6 @@ import {
 import { seedRecords, TEST_MNEMONIC, truncateAll } from "../scripts/seed-records.ts";
 import { streamUnanchoredRecords } from "../src/records-source.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
-
-const DEFAULT_SIZES = [100, 1000, 10000, 100000, 1000000];
 
 interface PerfRow {
   n: number;
@@ -37,47 +41,62 @@ interface PerfRow {
   [key: string]: number;
 }
 
-function parseCliArgs(argv: string[]): { sizes: number[] } {
+export interface PerfOptions {
+  sizes: number[];
+  /** ANCHOR_MAX_BATCH_SIZE: sizes above it aren't batches the configured system would build. */
+  maxBatchSize: number;
+  /** Timed repetitions per size, after one discarded warm-up. */
+  repeats: number;
+  /** Repetitions for sizes above LARGE_SIZE_THRESHOLD. */
+  repeatsLarge: number;
+}
+
+export interface PerfCell {
+  n: number;
+  repeats: number;
+}
+
+export function parsePerfArgs(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): PerfOptions & { cell: PerfCell | null } {
   const { values } = parseArgs({
     args: argv,
     options: {
       sizes: { type: "string" },
+      repeats: { type: "string" },
+      "repeats-large": { type: "string" },
+      cell: { type: "string" },
     },
   });
 
-  if (values.sizes === undefined) {
-    return { sizes: DEFAULT_SIZES };
-  }
+  const maxBatchSize = integerEnv(env, "ANCHOR_MAX_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE, {
+    min: 1,
+  });
 
-  const sizes = values.sizes.split(",").map((raw) => Number(raw.trim()));
-  for (const n of sizes) {
-    if (!Number.isInteger(n) || n <= 0) {
-      throw new Error(
-        `--sizes must be a comma-separated list of positive integers, received: ${values.sizes}`,
-      );
-    }
-  }
-  return { sizes };
+  return {
+    sizes: parseBenchSizes(values.sizes, maxBatchSize),
+    maxBatchSize,
+    repeats: parseRepeats(values.repeats, "--repeats", 10),
+    repeatsLarge: parseRepeats(values["repeats-large"], "--repeats-large", 3),
+    cell: values.cell === undefined ? null : (JSON.parse(values.cell) as PerfCell),
+  };
 }
 
 /**
- * Resets the database to exactly `n` un-anchored valid records, then runs
- * the same records-source -> validate -> leaf -> tree pipeline `cycle.ts`
- * runs in production, timing each stage separately. `validate` and `leaf`
- * call crypto-utils's primitives directly (not `validation.ts`'s
- * `validateRecord`, which fuses them) specifically so they can be timed
- * apart, and `treeMs` covers both tree-build and proof-generation
- * (crypto-utils's `buildMerkleTree` fuses those two).
+ * One timed pass over the unanchored records: the same records-source ->
+ * validate -> leaf -> tree pipeline `cycle.ts` runs in production, timing each
+ * stage separately. `validate` and `leaf` call crypto-utils's primitives
+ * directly (not `validation.ts`'s `validateRecord`, which fuses them) so they
+ * can be timed apart, and `treeMs` covers both tree-build and proof-generation
+ * (crypto-utils's `buildMerkleTree` fuses those two). Nothing is persisted, so
+ * passes can repeat over the same records.
  */
-async function benchmarkSize(
+async function measurePipeline(
   pool: Pool,
-  adminDatabaseUrl: string,
   wallet: ReturnType<typeof Wallet.fromPhrase>,
   n: number,
 ): Promise<PerfRow> {
-  await truncateAll(adminDatabaseUrl);
-  await seedRecords(pool, wallet, "prescription", n);
-
   const tracker = trackPeakMemory();
   tracker.sample();
   const cpu = trackCpu();
@@ -157,9 +176,49 @@ async function benchmarkSize(
   };
 }
 
+/**
+ * Steady state, as the long-running daemon would be: reseed `n` records once,
+ * one discarded warm-up pass, then `repeats` timed passes over the same records.
+ */
+async function measureSize(
+  pool: Pool,
+  adminDatabaseUrl: string,
+  wallet: ReturnType<typeof Wallet.fromPhrase>,
+  cell: PerfCell,
+): Promise<PerfRow[]> {
+  await truncateAll(adminDatabaseUrl);
+  await seedRecords(pool, wallet, "prescription", cell.n);
+
+  await measurePipeline(pool, wallet, cell.n);
+  const rows: PerfRow[] = [];
+  for (let repetition = 1; repetition <= cell.repeats; repetition++) {
+    rows.push({ ...(await measurePipeline(pool, wallet, cell.n)), repetition });
+  }
+  return rows;
+}
+
+const SELF = fileURLToPath(import.meta.url);
+
+// Each size runs in its own process, so its peak RSS and JIT state don't leak into the next.
+function runSizeInChild(cell: PerfCell, sizes: number[]): Promise<PerfRow[]> {
+  return new Promise((resolve, reject) => {
+    const child = fork(SELF, ["--cell", JSON.stringify(cell), "--sizes", sizes.join(",")]);
+    let rows: PerfRow[] | null = null;
+
+    child.on("message", (message) => {
+      rows = message as PerfRow[];
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0 && rows) resolve(rows);
+      else reject(new Error(`size ${cell.n} exited with code ${code}`));
+    });
+  });
+}
+
 async function main(): Promise<void> {
   const startedAt = new Date();
-  const { sizes } = parseCliArgs(process.argv.slice(2));
+  const { cell, ...options } = parsePerfArgs(process.argv.slice(2));
 
   const databaseUrl = process.env.DATABASE_URL;
   const adminDatabaseUrl = process.env.ADMIN_DATABASE_URL;
@@ -173,28 +232,51 @@ async function main(): Promise<void> {
     );
   }
 
-  const wallet = Wallet.fromPhrase(TEST_MNEMONIC);
-  const pool = createDbPool(databaseUrl);
-
-  const rows: PerfRow[] = [];
-  try {
-    for (const n of sizes) {
-      console.log(`Benchmarking n=${n}...`);
-      const row = await benchmarkSize(pool, adminDatabaseUrl, wallet, n);
-      console.log(row);
-      rows.push(row);
+  if (cell) {
+    const pool = createDbPool(databaseUrl);
+    try {
+      const rows = await measureSize(pool, adminDatabaseUrl, Wallet.fromPhrase(TEST_MNEMONIC), cell);
+      await new Promise<void>((resolve, reject) =>
+        process.send!(rows, (error: Error | null) => (error ? reject(error) : resolve())),
+      );
+    } finally {
+      await pool.end();
     }
-  } finally {
-    await pool.end();
+    return;
   }
 
-  const { jsonPath, csvPath } = await writeResults(
-    "perf",
-    rows,
-    path.join(import.meta.dirname, "results"),
-    collectRunMetadata({ sizes }, startedAt),
-  );
-  console.log(`Wrote ${jsonPath} and ${csvPath}`);
+  const rows: PerfRow[] = [];
+  let failure: { n: number; error: string } | null = null;
+  for (const n of [...options.sizes].sort((a, b) => a - b)) {
+    const repeats = repeatsFor(n, options.repeats, options.repeatsLarge);
+    console.log(`Benchmarking n=${n} (${repeats} repetitions after a warm-up)...`);
+    try {
+      const sizeRows = await runSizeInChild({ n, repeats }, options.sizes);
+      const totals = sizeRows.map((row) => row.totalMs);
+      const mean = totals.reduce((sum, ms) => sum + ms, 0) / totals.length;
+      console.log(`  n=${n}: mean total ${Math.round(mean)} ms (${totals.join(", ")})`);
+      rows.push(...sizeRows);
+    } catch (error) {
+      failure = { n, error: error instanceof Error ? error.message : String(error) };
+      break;
+    }
+  }
+
+  const metadata = collectRunMetadata(options, startedAt);
+  if (failure) Object.assign(metadata, { incomplete: true, failedCell: failure.n, error: failure.error });
+  if (rows.length > 0) {
+    const { jsonPath, csvPath } = await writeResults(
+      "perf",
+      rows,
+      path.join(import.meta.dirname, "results"),
+      metadata,
+    );
+    console.log(`Wrote ${jsonPath} and ${csvPath}`);
+  }
+  if (failure) {
+    console.error(`Size ${failure.n} failed: ${failure.error}`);
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

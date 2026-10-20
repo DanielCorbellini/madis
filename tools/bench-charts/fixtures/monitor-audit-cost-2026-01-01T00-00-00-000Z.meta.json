@@ -13,7 +13,9 @@
       10000,
       100000
     ],
-    "maxBatchSize": 100000
+    "maxBatchSize": 100000,
+    "repeats": 3,
+    "repeatsLarge": 3
   },
   "startedAt": "2026-01-01T00:00:00.000Z",
   "finishedAt": "2026-01-01T00:05:00.000Z"

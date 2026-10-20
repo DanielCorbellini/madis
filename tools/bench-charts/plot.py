@@ -307,8 +307,35 @@ def monitor_sizing(rows, out_dir, stem):
 
 # ---------- anchor charts ----------
 
+def group_by_n(rows):
+    groups: dict[int, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["n"], []).append(row)
+    return dict(sorted(groups.items()))
+
+
+def mean_by_n(rows):
+    """One row per size: the mean of every numeric column over its repetitions."""
+    averaged = []
+    for n, group in group_by_n(rows).items():
+        row = {"n": n, "repetitions": len(group)}
+        for key, value in group[0].items():
+            if isinstance(value, (int, float)) and key not in ("n", "repetition"):
+                row[key] = statistics.mean(r[key] for r in group)
+        averaged.append(row)
+    return averaged
+
+
+def repetitions_text(counts) -> str:
+    low, high = min(counts), max(counts)
+    if high == 1:
+        return "uma execução por tamanho"
+    return f"média de {low} repetições por tamanho" if low == high else \
+        f"média de {low} a {high} repetições por tamanho"
+
+
 def anchor_perf(rows, out_dir, stem):
-    rows = sorted(rows, key=lambda r: r["n"])
+    rows = mean_by_n(rows)
     if len(rows) < 2:
         return note("perf", "menos de 2 tamanhos no arquivo (use --file para escolher outra execução)")
     ns = [r["n"] for r in rows]
@@ -329,7 +356,8 @@ def anchor_perf(rows, out_dir, stem):
     ax.grid(axis="x", visible=False)
     ax.legend()
     save(fig, out_dir, "anchor-perf-fases.png",
-         "Tempo de cada fase do anchor-service por volume de registros.", stem)
+         "Tempo de cada fase do anchor-service por volume de registros "
+         f"({repetitions_text([r['repetitions'] for r in rows])}).", stem)
 
     has_cpu = all("cpuUserMs" in r for r in rows)
     fig, axes = plt.subplots(1, 2 if has_cpu else 1, figsize=(WIDTH_IN, 3.2), squeeze=False)
@@ -380,8 +408,8 @@ def anchor_cross_chain(rows, out_dir, stem):
 
 
 def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
-    anchor = {r["n"]: r["totalMs"] for r in perf_rows}
-    audit = {r["n"]: r["totalMs"] for r in audit_rows}
+    anchor = {n: [r["totalMs"] / 1000 for r in g] for n, g in group_by_n(perf_rows).items()}
+    audit = {n: [r["totalMs"] / 1000 for r in g] for n, g in group_by_n(audit_rows).items()}
     common = sorted(set(anchor) & set(audit))
     for n in sorted(set(anchor) ^ set(audit)):
         print(f"[aviso] comparacao-ancoragem-auditoria: n = {n} só existe em uma das execuções; ficou de fora")
@@ -396,11 +424,14 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
         print("[aviso] comparacao-ancoragem-auditoria: as duas execuções vêm de CPUs diferentes "
               f"({perf_meta.get('cpuModel')} vs {audit_meta.get('cpuModel')})")
 
-    anchor_s = [anchor[n] / 1000 for n in common]
-    audit_s = [audit[n] / 1000 for n in common]
+    spread = lambda values: statistics.stdev(values) if len(values) > 1 else 0.0
+    anchor_s = [statistics.mean(anchor[n]) for n in common]
+    audit_s = [statistics.mean(audit[n]) for n in common]
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.8))
-    ax.plot(common, anchor_s, color=BLUE, marker="o", label="Ancoragem")
-    ax.plot(common, audit_s, color=ORANGE, marker="s", label="Auditoria")
+    ax.errorbar(common, anchor_s, yerr=[spread(anchor[n]) for n in common], color=BLUE,
+                marker="o", label="Ancoragem", capsize=3, elinewidth=1)
+    ax.errorbar(common, audit_s, yerr=[spread(audit[n]) for n in common], color=ORANGE,
+                marker="s", label="Auditoria", capsize=3, elinewidth=1)
     for n, a, b in zip(common, anchor_s, audit_s):
         ratio = f"{a / b:.1f}".replace(".", ",") + "×" if b > 0 else "—"
         ax.annotate(ratio, (n, a), textcoords="offset points", xytext=(0, 8),
@@ -410,16 +441,20 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
     low, high = ax.get_ylim()
     ax.set_ylim(low, high * 2)  # room for the ratio labels above the top point
     ax.set_xlabel("Registros no lote (escala log)")
-    ax.set_ylabel("Tempo de processamento (s, escala log)")
+    ax.set_ylabel("Tempo de processamento (s, média; escala log)")
     ax.set_title("Processamento por conjunto de registros: ancoragem vs auditoria")
     ax.legend(loc="upper left")
 
     limit = (audit_meta.get("options") or {}).get("maxBatchSize")
     limit_text = f" Limite de lote (ANCHOR_MAX_BATCH_SIZE): {limit}." if limit else ""
     save(fig, out_dir, "comparacao-ancoragem-auditoria.png",
-         "Tempo total para processar um lote com n registros, sem chamadas à blockchain. "
-         "Ancoragem: leitura, verificação das assinaturas, folhas e árvore; auditoria: leitura "
-         "dos registros e provas, folhas e reconstrução da raiz. O número acima de cada ponto é "
+         "Tempo total para processar um lote com n registros, sem chamadas à blockchain "
+         f"({repetitions_text([len(anchor[n]) for n in common] + [len(audit[n]) for n in common])}, "
+         "após uma execução de aquecimento descartada; a barra indica o desvio padrão). "
+         "Ancoragem: leitura, verificação das assinaturas, folhas e árvore com a geração e a "
+         "conferência da prova de cada registro; auditoria: leitura dos registros e provas, folhas "
+         "e reconstrução da raiz. A razão reflete o conjunto dessas diferenças, não só as "
+         "assinaturas. O número acima de cada ponto é "
          f"a razão ancoragem/auditoria.{limit_text} Ancoragem: {perf_stem.name}.csv.",
          audit_stem)
 
