@@ -1,0 +1,19 @@
+{
+  "cpuModel": "Fixture CPU (synthetic data)",
+  "cpuCores": 8,
+  "totalMemBytes": 17179869184,
+  "platform": "linux",
+  "osRelease": "fixture",
+  "nodeVersion": "v22.0.0",
+  "gitCommit": "fixture",
+  "gitDirty": false,
+  "options": {
+    "sizes": [
+      1000,
+      10000,
+      100000
+    ]
+  },
+  "startedAt": "2026-01-01T00:00:00.000Z",
+  "finishedAt": "2026-01-01T00:05:00.000Z"
+}

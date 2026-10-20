@@ -1,0 +1,35 @@
+[
+  {
+    "n": 1000,
+    "readMs": 80,
+    "leafMs": 120,
+    "rootMs": 180,
+    "totalMs": 380,
+    "cpuUserMs": 304,
+    "cpuSystemMs": 11,
+    "cpuPercent": 83.0,
+    "rssPeakBytes": 146800640
+  },
+  {
+    "n": 10000,
+    "readMs": 800,
+    "leafMs": 1200,
+    "rootMs": 1800,
+    "totalMs": 3800,
+    "cpuUserMs": 3040,
+    "cpuSystemMs": 114,
+    "cpuPercent": 83.0,
+    "rssPeakBytes": 153092096
+  },
+  {
+    "n": 100000,
+    "readMs": 8000,
+    "leafMs": 12000,
+    "rootMs": 18000,
+    "totalMs": 38000,
+    "cpuUserMs": 30400,
+    "cpuSystemMs": 1140,
+    "cpuPercent": 83.0,
+    "rssPeakBytes": 216006656
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "n": 1000,
+    "scanMs": 20,
+    "validateMs": 1700,
+    "leafMs": 120,
+    "treeMs": 180,
+    "totalMs": 2020,
+    "rssPeakBytes": 158334976,
+    "heapUsedPeakBytes": 41943040,
+    "cpuUserMs": 1919,
+    "cpuSystemMs": 40,
+    "cpuPercent": 97.0
+  },
+  {
+    "n": 10000,
+    "scanMs": 200,
+    "validateMs": 17000,
+    "leafMs": 1200,
+    "treeMs": 1800,
+    "totalMs": 20200,
+    "rssPeakBytes": 167772160,
+    "heapUsedPeakBytes": 47185920,
+    "cpuUserMs": 19190,
+    "cpuSystemMs": 404,
+    "cpuPercent": 97.0
+  },
+  {
+    "n": 100000,
+    "scanMs": 2000,
+    "validateMs": 170000,
+    "leafMs": 12000,
+    "treeMs": 18000,
+    "totalMs": 202000,
+    "rssPeakBytes": 262144000,
+    "heapUsedPeakBytes": 94371840,
+    "cpuUserMs": 191900,
+    "cpuSystemMs": 4040,
+    "cpuPercent": 97.0
+  }
+]

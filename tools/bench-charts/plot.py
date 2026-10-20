@@ -21,7 +21,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
-PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing"]
+PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing",
+            "monitor-audit-cost"]
 NAME = re.compile(r"^(?P<prefix>.+)-(?P<ts>\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)\.(json|csv)$")
 
 # Categorical slots (validated: CVD-safe on white; slots 3-4 need labels/markers).
@@ -378,6 +379,51 @@ def anchor_cross_chain(rows, out_dir, stem):
          "Custo e latência de ancoragem de uma raiz por rede (submissões confirmadas).", stem)
 
 
+def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
+    anchor = {r["n"]: r["totalMs"] for r in perf_rows}
+    audit = {r["n"]: r["totalMs"] for r in audit_rows}
+    common = sorted(set(anchor) & set(audit))
+    for n in sorted(set(anchor) ^ set(audit)):
+        print(f"[aviso] comparacao-ancoragem-auditoria: n = {n} só existe em uma das execuções; ficou de fora")
+    if len(common) < 2:
+        return note("comparacao-ancoragem-auditoria", "menos de 2 tamanhos em comum entre as duas execuções")
+
+    perf_meta, audit_meta = read_meta(perf_stem), read_meta(audit_stem)
+    if not perf_meta:
+        print("[aviso] comparacao-ancoragem-auditoria: a execução do anchor não tem .meta.json; "
+              "não dá para conferir se as duas rodaram na mesma máquina")
+    elif perf_meta.get("cpuModel") != audit_meta.get("cpuModel"):
+        print("[aviso] comparacao-ancoragem-auditoria: as duas execuções vêm de CPUs diferentes "
+              f"({perf_meta.get('cpuModel')} vs {audit_meta.get('cpuModel')})")
+
+    anchor_s = [anchor[n] / 1000 for n in common]
+    audit_s = [audit[n] / 1000 for n in common]
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.8))
+    ax.plot(common, anchor_s, color=BLUE, marker="o", label="Ancoragem")
+    ax.plot(common, audit_s, color=ORANGE, marker="s", label="Auditoria")
+    for n, a, b in zip(common, anchor_s, audit_s):
+        ratio = f"{a / b:.1f}".replace(".", ",") + "×" if b > 0 else "—"
+        ax.annotate(ratio, (n, a), textcoords="offset points", xytext=(0, 8),
+                    ha="center", fontsize=8, color=INK_2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    low, high = ax.get_ylim()
+    ax.set_ylim(low, high * 2)  # room for the ratio labels above the top point
+    ax.set_xlabel("Registros no lote (escala log)")
+    ax.set_ylabel("Tempo de processamento (s, escala log)")
+    ax.set_title("Processamento por conjunto de registros: ancoragem vs auditoria")
+    ax.legend(loc="upper left")
+
+    limit = (audit_meta.get("options") or {}).get("maxBatchSize")
+    limit_text = f" Limite de lote (ANCHOR_MAX_BATCH_SIZE): {limit}." if limit else ""
+    save(fig, out_dir, "comparacao-ancoragem-auditoria.png",
+         "Tempo total para processar um lote com n registros, sem chamadas à blockchain. "
+         "Ancoragem: leitura, verificação das assinaturas, folhas e árvore; auditoria: leitura "
+         "dos registros e provas, folhas e reconstrução da raiz. O número acima de cada ponto é "
+         f"a razão ancoragem/auditoria.{limit_text} Ancoragem: {perf_stem.name}.csv.",
+         audit_stem)
+
+
 def note(what: str, why: str) -> None:
     print(f"[pulado] {what}: {why}")
 
@@ -388,6 +434,7 @@ CHARTS = {
     "monitor-sizing": monitor_sizing,
     "perf": anchor_perf,
     "cross-chain": anchor_cross_chain,
+    # monitor-audit-cost has no chart of its own; it feeds the comparison below.
 }
 
 
@@ -406,6 +453,7 @@ def main() -> None:
 
     runs = find_runs(args.results_dir, args.file)
     pinned = {path.with_suffix("") for path in args.file}
+    loaded: dict[str, tuple[list[dict], Path]] = {}
     for prefix in PREFIXES:
         stem = runs.get(prefix)
         if stem is None:
@@ -423,7 +471,12 @@ def main() -> None:
         if not rows:
             note(prefix, f"{stem.name} não tem linhas")
             continue
-        CHARTS[prefix](rows, out_dir, stem)
+        loaded[prefix] = (rows, stem)
+        if prefix in CHARTS:
+            CHARTS[prefix](rows, out_dir, stem)
+
+    if "perf" in loaded and "monitor-audit-cost" in loaded:
+        anchor_vs_audit(*loaded["perf"], *loaded["monitor-audit-cost"], out_dir)
 
 
 if __name__ == "__main__":
