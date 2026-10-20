@@ -172,7 +172,7 @@ def by_config(rows):
     return groups
 
 
-def config_lines(ax, rows, value):
+def config_lines(ax, rows, value, legend_loc="upper left"):
     ends = []
     for config, (label, color, marker) in CONFIGS.items():
         series = by_config(rows).get(config)
@@ -185,10 +185,12 @@ def config_lines(ax, rows, value):
                     color=color, marker=marker, label=label, capsize=3, elinewidth=1)
         ends.append((ms[-1], meds[-1]))
     ax.set_xscale("log")
+    # Zero baseline: a cost axis that starts near the data turns noise into gaps.
+    ax.set_ylim(bottom=0, top=ax.get_ylim()[1] * 1.15)
     decimal_comma(ax)
     label_ends(ax, ends)
     ax.set_xlabel("Lotes ancorados (M, escala log)")
-    ax.legend()
+    ax.legend(loc=legend_loc)
 
 
 # ---------- monitor charts ----------
@@ -217,12 +219,13 @@ def monitor_perf(rows, out_dir, stem):
          f"Tempo de CPU (usuário + sistema) por ciclo do monitor. {CPU_CAVEAT}", stem)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
-    config_lines(ax, rows, lambda r: r["peakRssBytes"] / 2**20)
+    config_lines(ax, rows, lambda r: r["peakRssBytes"] / 2**20, legend_loc="lower right")
     ax.set_ylabel("Pico de memória (MiB, mediana)")
     ax.set_title("Memória por ciclo do monitor")
     save(fig, out_dir, "monitor-custo-memoria.png",
          "Pico de memória residente (RSS) do processo por ciclo; cada configuração "
-         "roda em um processo próprio.", stem)
+         "roda em um processo próprio. A memória é praticamente a mesma nas três "
+         "configurações e não cresce com M, porque o monitor audita um lote por vez.", stem)
 
 
 def monitor_detection(rows, out_dir, stem):
