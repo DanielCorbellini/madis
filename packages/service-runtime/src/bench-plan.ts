@@ -3,15 +3,20 @@ export const LARGE_SIZE_THRESHOLD = 100_000;
 
 const SERIES = [1, 2, 5];
 
-/** The 1-2-5 series from 1,000 up to the batch limit: evenly spaced on a log axis. */
-export function defaultBenchSizes(maxBatchSize: number): number[] {
-  const sizes: number[] = [];
-  for (let decade = 1000; decade <= maxBatchSize; decade *= 10) {
+/** The 1-2-5 series between `from` (a power of ten) and `to`, inclusive: evenly spaced on a log axis. */
+export function oneTwoFive(from: number, to: number): number[] {
+  const values: number[] = [];
+  for (let decade = from; decade <= to; decade *= 10) {
     for (const step of SERIES) {
-      if (decade * step <= maxBatchSize) sizes.push(decade * step);
+      if (decade * step <= to) values.push(decade * step);
     }
   }
-  return sizes;
+  return values;
+}
+
+/** Records per batch: the 1-2-5 series from 1,000 up to the batch limit. */
+export function defaultBenchSizes(maxBatchSize: number): number[] {
+  return oneTwoFive(1000, maxBatchSize);
 }
 
 /**

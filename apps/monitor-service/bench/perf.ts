@@ -6,6 +6,7 @@ import {
   collectRunMetadata,
   createDbPool,
   createLogger,
+  oneTwoFive,
   trackCpu,
   writeResults,
 } from "service-runtime";
@@ -76,7 +77,7 @@ export function parsePerfArgs(argv: string[]): PerfOptions & { cell: CellSpec | 
     },
   });
 
-  const batches = (values.batches ?? "10,100,1000")
+  const batches = (values.batches ?? oneTwoFive(10, 1000).join(","))
     .split(",")
     .map((raw) => positiveInt(raw.trim(), "--batches", 0));
 

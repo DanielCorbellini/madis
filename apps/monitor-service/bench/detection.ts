@@ -1,10 +1,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { collectRunMetadata, writeResults } from "service-runtime";
+import { collectRunMetadata, oneTwoFive, writeResults } from "service-runtime";
 import { createAuditSelector } from "../src/audit-selection.ts";
 import { createRandomInt, type RandomInt } from "../src/random-source.ts";
-import { sizingRows } from "./sizing.ts";
+import { MAIN_POLICY_CYCLES, requiredSampleSize, sizingRows } from "./sizing.ts";
 
 export type Strategy = "shuffled-pass" | "independent";
 
@@ -20,15 +20,21 @@ interface TrialResult {
   capped: boolean;
 }
 
-const MS = [10, 100, 1000];
+const MS = oneTwoFive(10, 1000);
 const KS = [1, 3, 4, 10, 34, 100];
 const JS = [0, 1];
 const STRATEGIES: Strategy[] = ["shuffled-pass", "independent"];
 const LARGE_PASS = 100;
 
+/** The 1-hour guarantee k for M (the `sampling-1h` k of the cost bench). */
+const guaranteeK = (m: number): number => requiredSampleSize(m, MAIN_POLICY_CYCLES);
+
 export function detectionGrid(): Cell[] {
   return MS.flatMap((m) =>
-    KS.filter((k) => k <= m).flatMap((k) =>
+    [...new Set([...KS, guaranteeK(m)])]
+      .sort((a, b) => a - b)
+      .filter((k) => k <= m)
+      .flatMap((k) =>
       JS.flatMap((j) => STRATEGIES.map((strategy) => ({ m, k, j, strategy }))),
     ),
   );
@@ -131,6 +137,12 @@ export function summarizeCell(
   const cycles = results.map((r) => r.cycles).sort((a, b) => a - b);
   const pass = passLength(cell.m, cell.k);
   const mean = cycles.reduce((sum, c) => sum + c, 0) / cycles.length;
+  // Sample standard deviation, and the 95% confidence half-width of the mean.
+  const stdev =
+    cycles.length > 1
+      ? Math.sqrt(cycles.reduce((sum, c) => sum + (c - mean) ** 2, 0) / (cycles.length - 1))
+      : 0;
+  const ci95 = (1.96 * stdev) / Math.sqrt(cycles.length);
 
   return {
     m: cell.m,
@@ -148,6 +160,9 @@ export function summarizeCell(
     theoryMeanDiscrete:
       cell.j === 0 ? Math.round(theoryMeanDiscrete(cell.m, cell.k) * 100) / 100 : "",
     costBatchesPerCycle: cell.k + cell.j,
+    isGuaranteeK: cell.k === guaranteeK(cell.m),
+    stdev: Math.round(stdev * 100) / 100,
+    ci95: Math.round(ci95 * 100) / 100,
   };
 }
 

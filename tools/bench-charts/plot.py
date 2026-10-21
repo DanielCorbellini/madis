@@ -124,9 +124,6 @@ def median(values):
     return statistics.median(values)
 
 
-def p95(values):
-    ordered = sorted(values)
-    return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
 
 
 def save(fig, out_dir: Path, name: str, caption: str, stem: Path) -> None:
@@ -180,11 +177,12 @@ def config_lines(ax, rows, value, legend_loc="upper left"):
         if not series:
             continue
         ms = sorted(series)
-        meds = [median([value(r) for r in series[m]]) for m in ms]
-        highs = [p95([value(r) for r in series[m]]) for m in ms]
-        ax.errorbar(ms, meds, yerr=[[0] * len(ms), [h - v for h, v in zip(highs, meds)]],
-                    color=color, marker=marker, label=label, capsize=3, elinewidth=1)
-        ends.append((ms[-1], meds[-1]))
+        samples = [[value(r) for r in series[m]] for m in ms]
+        means = [statistics.mean(values) for values in samples]
+        spreads = [statistics.stdev(values) if len(values) > 1 else 0.0 for values in samples]
+        ax.errorbar(ms, means, yerr=spreads, color=color, marker=marker, label=label,
+                    capsize=3, elinewidth=1)
+        ends.append((ms[-1], means[-1]))
     ax.set_xscale("log")
     # Zero baseline: a cost axis that starts near the data turns noise into gaps.
     ax.set_ylim(bottom=0, top=ax.get_ylim()[1] * 1.15)
@@ -200,28 +198,28 @@ def monitor_perf(rows, out_dir, stem):
     if len({r["m"] for r in rows}) < 2:
         return note("monitor-perf", "menos de 2 valores de M")
     batch = rows[0].get("batchSize")
-    # With fewer than 20 cycles per point, nearest-rank p95 is just the maximum.
-    cycles = min(len(group) for series in by_config(rows).values() for group in series.values())
-    spread = "p95" if cycles >= 20 else "máximo"
+    counts = sorted({len(group) for series in by_config(rows).values() for group in series.values()})
+    cycles_text = " e ".join(str(c) for c in counts)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
     config_lines(ax, rows, lambda r: r["durationMs"] / 1000)
-    ax.set_ylabel(f"Tempo por ciclo (s, mediana; barra = {spread})")
+    ax.set_ylabel("Tempo por ciclo (s, média ± desvio padrão)")
     ax.set_title("Custo por ciclo do monitor: varredura completa vs amostragem")
     save(fig, out_dir, "monitor-custo-tempo.png",
          f"Tempo por ciclo do monitor em função do número de lotes ({batch} registros por lote). "
-         f"Mediana de {cycles} ou mais ciclos medidos por ponto; a barra indica o {spread}.", stem)
+         f"Média de {cycles_text} ciclos medidos por ponto (após um ciclo de aquecimento "
+         "descartado); a barra indica o desvio padrão.", stem)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: (r["cpuUserMs"] + r["cpuSystemMs"]) / 1000)
-    ax.set_ylabel("Tempo de CPU por ciclo (s, mediana)")
+    ax.set_ylabel("Tempo de CPU por ciclo (s, média ± desvio padrão)")
     ax.set_title("CPU por ciclo do monitor")
     save(fig, out_dir, "monitor-custo-cpu.png",
          f"Tempo de CPU (usuário + sistema) por ciclo do monitor. {CPU_CAVEAT}", stem)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: r["peakRssBytes"] / 2**20, legend_loc="lower right")
-    ax.set_ylabel("Pico de memória (MiB, mediana)")
+    ax.set_ylabel("Pico de memória (MiB, média ± desvio padrão)")
     ax.set_title("Memória por ciclo do monitor")
     save(fig, out_dir, "monitor-custo-memoria.png",
          "Pico de memória residente (RSS) do processo por ciclo; cada configuração "
@@ -254,6 +252,8 @@ def monitor_detection(rows, out_dir, stem):
     else:
         note("monitor-deteccao-vs-k", f"menos de 2 valores de k para M = {largest}, j = 1")
 
+    detection_vs_m(rows, out_dir, stem)
+
     k_target = math.ceil(largest / 30)
     available = {r["k"] for r in rows if r["m"] == largest}
     k = k_target if k_target in available else 3
@@ -278,6 +278,36 @@ def monitor_detection(rows, out_dir, stem):
     save(fig, out_dir, "monitor-estrategias.png",
          f"Média e máximo de ciclos até a detecção com {largest} lotes e k = {k}: a passagem "
          "embaralhada limita o pior caso; o sorteio independente não tem limite.", stem)
+
+
+def detection_vs_m(rows, out_dir, stem):
+    """Fixed k = 3 vs each M's 1-hour guarantee k: cost or latency, one has to grow."""
+    cells = [r for r in rows if r["strategy"] == "shuffled-pass" and r["j"] == 1]
+    fixed = {r["m"]: r for r in cells if r["k"] == 3}
+    guarantee = {r["m"]: r for r in cells if r["k"] == math.ceil(r["m"] / 30)}
+    ms = sorted(set(fixed) & set(guarantee))
+    if len(ms) < 2:
+        return note("monitor-deteccao-vs-m", "menos de 2 valores de M com k = 3 e o k da garantia")
+
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.8))
+    ax.axhline(60, color=INK, linestyle="--", linewidth=1.2, zorder=5, label="1 hora (60 ciclos)")
+    for series, label, color, marker in ((fixed, "k = 3", ORANGE, "s"),
+                                         (guarantee, "k da garantia (⌈M/30⌉)", BLUE, "o")):
+        ax.plot(ms, [series[m]["max"] for m in ms], color=color, marker=marker,
+                label=f"{label}: máximo")
+        ax.plot(ms, [series[m]["mean"] for m in ms], color=color, marker=marker,
+                linestyle=":", label=f"{label}: média")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Lotes ancorados (M, escala log)")
+    ax.set_ylabel("Ciclos até a detecção (escala log)")
+    ax.set_title("Latência de detecção vs lotes: k fixo vs k da garantia de 1 hora")
+    ax.legend(loc="upper left", fontsize=7)
+    save(fig, out_dir, "monitor-deteccao-vs-m.png",
+         "Ciclos até detectar uma adulteração persistente, por número de lotes, com 1 verificação "
+         "pontual por ciclo (simulação com o seletor real). Com k fixo, o custo por ciclo fica "
+         "constante e a latência cresce com o histórico; com o k da garantia, a latência fica "
+         "abaixo de 1 hora (cron de 1 minuto) e o custo cresce devagar.", stem)
 
 
 def monitor_sizing(rows, out_dir, stem):
