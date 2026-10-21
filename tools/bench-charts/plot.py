@@ -365,29 +365,41 @@ def repetitions_text(counts) -> str:
 
 
 def anchor_perf(rows, out_dir, stem):
+    raw = group_by_n(rows)
     rows = mean_by_n(rows)
     if len(rows) < 2:
         return note("perf", "menos de 2 tamanhos no arquivo (use --file para escolher outra execução)")
     ns = [r["n"] for r in rows]
     labels = [f"{n:,}".replace(",", ".") for n in ns]
 
+    # Per record, so every size shares one scale and the phase mix stays readable.
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
     bottom = [0.0] * len(rows)
-    for key, label, color in (("scanMs", "Leitura", BLUE), ("validateMs", "Validação", ORANGE),
-                              ("leafMs", "Folhas", AQUA), ("treeMs", "Árvore", YELLOW)):
-        values = [r[key] / 1000 for r in rows]
+    phases = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
+              ("leafMs", "Folhas", AQUA), ("treeMs", "Árvore e provas", YELLOW))
+    for key, label, color in phases:
+        values = [r[key] / r["n"] for r in rows]
         ax.bar(labels, values, bottom=bottom, color=color, label=label,
                edgecolor="white", linewidth=1)
         bottom = [b + v for b, v in zip(bottom, values)]
+    for x, total in enumerate(bottom):
+        ax.annotate(br(total), (x, total), textcoords="offset points", xytext=(0, 3),
+                    ha="center", fontsize=7, color=INK_2)
+    ax.set_ylim(0, max(bottom) * 1.3)
     decimal_comma(ax)
-    ax.set_xlabel("Registros ancorados")
-    ax.set_ylabel("Tempo (s)")
-    ax.set_title("Tempo por fase da ancoragem")
+    ax.set_xlabel("Registros no lote")
+    ax.set_ylabel("Tempo por registro (ms)")
+    ax.set_title("Tempo por registro em cada fase da ancoragem")
     ax.grid(axis="x", visible=False)
-    ax.legend()
+    ax.legend(loc="upper left", ncol=2, fontsize=7)
     save(fig, out_dir, "anchor-perf-fases.png",
-         "Tempo de cada fase do anchor-service por volume de registros "
-         f"({repetitions_text([r['repetitions'] for r in rows])}).", stem)
+         "Tempo médio por registro em cada fase do anchor-service, por tamanho de lote "
+         f"({repetitions_text([r['repetitions'] for r in rows])}); o número acima de cada barra "
+         "é o total por registro. O tempo total do lote é esse valor vezes o número de registros.",
+         stem)
+
+    anchor_total_time(raw, out_dir, stem)
+    anchor_phase_table(raw, out_dir, stem)
 
     has_cpu = all("cpuUserMs" in r for r in rows)
     fig, axes = plt.subplots(1, 2 if has_cpu else 1, figsize=(WIDTH_IN, 3.2), squeeze=False)
@@ -435,6 +447,66 @@ def anchor_cross_chain(rows, out_dir, stem):
         ax.grid(axis="x", visible=False)
     save(fig, out_dir, "anchor-cross-chain.png",
          "Custo e latência de ancoragem de uma raiz por rede (submissões confirmadas).", stem)
+
+
+def anchor_total_time(raw, out_dir, stem):
+    """Total time per batch on linear axes: a straight line means linear cost."""
+    ns = sorted(raw)
+    totals = [[r["totalMs"] / 1000 for r in raw[n]] for n in ns]
+    means = [statistics.mean(t) for t in totals]
+    spreads = [statistics.stdev(t) if len(t) > 1 else 0.0 for t in totals]
+    # Least-squares slope through the origin: the average cost per record.
+    slope_ms = 1000 * sum(n * m for n, m in zip(ns, means)) / sum(n * n for n in ns)
+
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    ax.errorbar(ns, means, yerr=spreads, color=BLUE, marker="o", capsize=3, elinewidth=1,
+                label="Média ± desvio padrão")
+    ax.plot([0, ns[-1]], [0, slope_ms * ns[-1] / 1000], color=INK_2, linestyle="--",
+            linewidth=1, label=f"Reta de {br(slope_ms)} ms por registro")
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", ".")))
+    decimal_comma(ax)
+    ax.set_xlabel("Registros no lote")
+    ax.set_ylabel("Tempo total por lote (s)")
+    ax.set_title("Tempo de processamento de um lote na ancoragem")
+    ax.legend(loc="upper left")
+    counts = [len(t) for t in totals]
+    save(fig, out_dir, "anchor-perf-tempo.png",
+         "Tempo total de processamento de um lote no anchor-service (leitura, verificação das "
+         "assinaturas, folhas e árvore com provas), sem chamadas à blockchain "
+         f"({repetitions_text(counts)}, após uma execução de aquecimento descartada; a barra indica "
+         f"o desvio padrão). A reta tracejada é o ajuste de {br(slope_ms)} ms por registro.", stem)
+
+
+def anchor_phase_table(raw, out_dir, stem):
+    """Mean time per record in each phase, per size: a summary to paste as a table."""
+    phases = (("scanMs", "Leitura"), ("validateMs", "Assinaturas"), ("leafMs", "Folhas"),
+              ("treeMs", "Árvore e provas"))
+    header = ["Registros"] + [f"{label} (ms/reg)" for _, label in phases] + \
+             [f"{label} (%)" for _, label in phases] + ["Total médio (s)", "Desvio (s)", "Repetições"]
+    table = []
+    for n in sorted(raw):
+        group = raw[n]
+        total = statistics.mean(r["totalMs"] for r in group)
+        totals_s = [r["totalMs"] / 1000 for r in group]
+        per_record = [statistics.mean(r[key] for r in group) / n for key, _ in phases]
+        shares = [100 * statistics.mean(r[key] for r in group) / total for key, _ in phases]
+        table.append([f"{n:,}".replace(",", ".")]
+                     + [f"{v:.3f}".replace(".", ",") for v in per_record]
+                     + [f"{v:.0f}" for v in shares]
+                     + [f"{total / 1000:.2f}".replace(".", ","),
+                        f"{statistics.stdev(totals_s) if len(totals_s) > 1 else 0:.2f}".replace(".", ","),
+                        str(len(group))])
+
+    path = out_dir / "anchor-perf-fases-tabela.csv"
+    with path.open("w", newline="") as f:
+        csv.writer(f, delimiter=";").writerows([header] + table)
+    print(f"\n{path}\n  Tabela (separada por ';', vírgula decimal) para importar no Google Docs/Sheets. "
+          f"Dados: {stem.name}.csv.")
+    widths = [max(len(row[i]) for row in [header] + table) for i in range(len(header))]
+    for row in [header] + table:
+        print("  " + "  ".join(cell.rjust(w) for cell, w in zip(row, widths)))
 
 
 def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
