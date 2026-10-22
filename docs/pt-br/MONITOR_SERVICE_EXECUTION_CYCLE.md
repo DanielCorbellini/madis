@@ -230,46 +230,52 @@ Obrigatórias: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/
 
 ## 6. Benchmarks
 
-Três ferramentas produzem a evidência do trade-off da amostragem para o TCC. Todas escrevem `<prefixo>-<timestamp>.{json,csv,meta.json}` em `apps/monitor-service/bench/results/` (ignorado pelo git); o `.meta.json` registra a máquina (CPU, núcleos, RAM, SO, Node), o commit git e as opções da execução. Design: `docs/superpowers/specs/2026-10-18-monitor-benchmarks-design.md`.
+Quatro ferramentas produzem a evidência para o TCC. Todas gravam `<prefixo>-<timestamp>.{json,csv,meta.json}` numa pasta `bench/results/` (ignorada pelo git); o `.meta.json` registra a máquina (CPU, núcleos, RAM, SO, Node), o commit do git, se havia alterações não commitadas e as opções da execução. Elas seguem a mesma metodologia: tamanhos na sequência 1–2–5, um processo por grupo medido, uma execução de aquecimento descartada, repetições medidas e gráficos com média ± desvio padrão. Guias detalhados: `docs/pt-br/BENCHMARK_MONITOR_CUSTO_POR_CICLO.md`, `docs/pt-br/BENCHMARK_MONITOR_DETECCAO.md` e `docs/pt-br/BENCHMARK_ANCORAGEM_VS_AUDITORIA.md`. Designs: `docs/superpowers/specs/2026-10-18-monitor-benchmarks-design.md` e `docs/superpowers/specs/2026-10-20-anchor-vs-audit-cost-design.md`.
 
-### 6.1 Benchmark de custo — `bench:perf`
+### 6.1 Custo por ciclo — `bench:perf`
 
-Mede tempo por ciclo, CPU e pico de memória da varredura completa vs amostragem (k = 3, e o k que garante pior caso de 1 hora com cron de 1 minuto, k = ⌈M/30⌉), com M = 10, 100 e 1.000 lotes de 1.000 registros. Executa o ciclo real (leituras reais no Postgres, hashing e chamadas à chain) sobre uma visão que só enxerga os primeiros M lotes ancorados, então uma única preparação serve a todos os tamanhos. Cada (M, configuração) roda em um processo filho próprio, para que o pico de memória não vaze entre eles.
+Mede tempo por ciclo, CPU e pico de memória da varredura completa vs amostragem (k = 3, e o k que garante pior caso de 1 hora com cron de 1 minuto, k = ⌈M/30⌉), com M = 10, 20, 50, 100, 200, 500 e 1.000 lotes de 1.000 registros. Executa o ciclo real (leituras reais no Postgres, hashing e chamadas à chain) sobre uma visão que só enxerga os primeiros M lotes ancorados, então uma única preparação serve a todos os M. Cada (M, configuração) roda em um processo filho próprio, com um ciclo de aquecimento não medido e depois 3 ciclos de varredura completa ou 10 de amostragem; um ciclo que dispara alerta, escala, pula um lote ou confere menos registros que o esperado invalida a execução.
 
-Preparação, uma vez, **com os dois daemons parados** (`docker compose stop anchor-service monitor-service`):
-
-1. Chain nova e banco vazio: `docker compose --profile local down -v`, depois `docker compose --profile local up -d postgres hardhat-node`. Uma raiz sobrando na chain (por exemplo, deixada pelo `bench:cross-chain` do anchor) invalidaria a execução.
-2. `pnpm --filter anchor-service seed --count 1000000 --type prescription --truncate`
-3. Um ciclo do anchor com `ANCHOR_MAX_BATCH_SIZE=1000` (1.000 lotes confirmados).
-
-**Rode o `bench:perf` do anchor antes desta preparação, nunca depois: ele trunca o banco.**
-
-Execução (a partir de `apps/monitor-service`, com `DATABASE_URL` apontando para `localhost:5433`):
+Preparação, uma vez, **com os dois daemons parados**: chain nova e banco vazio (`docker compose --profile local down -v`, depois `up -d postgres hardhat-node`); `seed --count 1000000`; um ciclo do anchor com `ANCHOR_MAX_BATCH_SIZE=1000` (e `ANCHOR_POLLING_INTERVAL_MS=100` para ancorar mais rápido no nó local). **Rode o `bench:perf` do anchor antes desta preparação, nunca depois: ele trunca o banco.**
 
 ```bash
 DATABASE_URL=<DSN do app_user @localhost:5433> RPC_URL=http://localhost:8545 ANCHOR_CHAIN_ID=31337 \
-  pnpm bench:perf [--batches 10,100,1000] [--batch-size 1000] [--full-cycles 3] [--sampling-cycles 10] [--seed bench-1]
+  pnpm --filter monitor-service bench:perf [--batches 10,20,50,100,200,500,1000] [--batch-size 1000] \
+  [--full-cycles 3] [--sampling-cycles 10] [--seed bench-1] [--log-level warn]
 ```
 
-Ele se recusa a começar se houver menos de max(M) lotes ancorados, se o tamanho dos lotes na chain for diferente de `--batch-size`, ou se algum desses lotes não estiver `confirmed` no Postgres — e imprime os comandos de preparação. Um ciclo que dispare alerta ou escale invalida a execução (os dados não estão limpos); se uma célula falhar, as linhas já medidas são gravadas mesmo assim e o `.meta.json` registra `incomplete`, a célula que falhou e o erro. Conte com cerca de 30 minutos, a maior parte nas varreduras completas com 1.000 lotes. Rode duas vezes e confira que concordam antes de gerar o gráfico de uma delas.
+Cerca de 50 minutos, a maior parte nas varreduras completas dos M maiores.
 
-### 6.2 Simulação da latência de detecção — `bench:detection`
+### 6.2 Latência de detecção — `bench:detection`
 
 ```bash
 pnpm --filter monitor-service bench:detection [--trials 10000] [--trials-large 1000] [--seed bench-1]
 ```
 
-Usa o seletor real (`createAuditSelector`) sem banco e sem chain: cada tentativa adultera um lote aleatório em um ponto aleatório de uma passada e conta os ciclos até ele ser auditado, para M ∈ {10, 100, 1000}, k ∈ {1, 3, 4, 10, 34, 100}, j ∈ {0, 1}, comparando com uma linha de base de sorteio independente a cada ciclo. Células com passada maior que 100 ciclos usam `--trials-large`. Saída: `monitor-detection` (média, p50, p95 e máximo ao lado do pior caso teórico 2L − 1, da média contínua 7L/12 e da média discreta exata, calculada com os tamanhos reais das fatias — (7L − 1)(L + 1)/(12L) quando k divide M) e `monitor-sizing` (k necessário por M para 1 h @ 1 min, 1 h @ 5 min e 1 dia @ 5 min). Sai com código diferente de zero se alguma tentativa da passada embaralhada passar do limite de segurança. A execução completa com os padrões leva cerca de 15 minutos.
+Usa o seletor real (`createAuditSelector`) sem banco e sem chain: cada tentativa adultera um lote aleatório em um ponto aleatório de uma passada e conta os ciclos até ele ser auditado. Grade: M na mesma sequência 1–2–5 (10 a 1.000), k ∈ {1, 3, 4, 10, 34, 100} mais o k da garantia de 1 hora de cada M, j ∈ {0, 1}, passada embaralhada vs sorteio independente a cada ciclo (160 combinações). Saída: `monitor-detection` (média, p50, p95, máximo, desvio padrão e meia-largura do intervalo de 95%, ao lado do pior caso teórico 2L − 1, da média contínua 7L/12 e da média discreta exata calculada com os tamanhos reais das fatias) e `monitor-sizing` (k necessário por M para 1 h @ 1 min, 1 h @ 5 min e 1 dia @ 5 min). Sai com código diferente de zero se alguma tentativa da passada embaralhada passar do limite de segurança. Cerca de 30–40 minutos.
 
 ### 6.3 Gráficos
 
 ```bash
-tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/monitor-service/bench/results
-tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/anchor-service/bench/results [--file <execução mais antiga>]
+tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/monitor-service/bench/results \
+  [--file apps/anchor-service/bench/results/perf-<timestamp>.json] [--linear]
 ```
 
-Gera PNGs (rótulos em português) em `<diretório-de-resultados>/charts/` a partir da execução mais recente de cada tipo e imprime uma legenda sugerida por gráfico. Preparação e detalhes: `tools/bench-charts/README.md`.
+Gera PNGs (rótulos em português) em `<diretório-de-resultados>/charts/` a partir da execução mais recente de cada tipo e imprime uma legenda sugerida por gráfico. `--file` fixa uma execução específica (necessário para a execução do anchor da §6.5, que fica em outra pasta); `--linear` desenha os gráficos de custo por ciclo e de comparação com eixos lineares, em vez de log. Preparação e a lista completa de gráficos: `tools/bench-charts/README.md`.
 
 ### 6.4 Verificação ao vivo (manual)
 
 Para mostrar que a simulação corresponde ao daemon real: rode-o com `MONITOR_AUDIT_MODE=sampling`, `MONITOR_ESCALATE_ON_ANOMALY=false` e `LOG_LEVEL=debug` (a linha `sampling order` mostra a passada), adultere um registro (`pnpm --filter anchor-service tamper edit-record …`), anote o ciclo e conte os ciclos até o alerta `record_tampered`. Algumas execuções devem cair dentro da distribuição simulada e nunca além de 2L − 1.
+
+### 6.5 Custo de ancorar vs auditar — `bench:audit-cost`
+
+Compara o tempo de **processamento** do mesmo conjunto de registros nos dois serviços, sem nenhuma chamada à chain: a ancoragem (o `bench:perf` do anchor: leitura, verificação das assinaturas, folhas, árvore e provas) contra a auditoria (leitura dos registros e provas, folhas e reconstrução da raiz, isto é, o caminho rápido da auditoria sobre um conjunto íntegro). O benchmark da auditoria também mede, fora do seu total, a verificação da prova de **todos** os registros (`drillDownMs`), o pior caso para localizar um registro adulterado; o do anchor divide a etapa da árvore em construção da árvore e geração das provas (`treeBuildMs`, `proofsMs`).
+
+A ordem é fixa: primeiro o `bench:perf` do anchor (ele trunca o banco e deixa os registros do maior tamanho sem ancorar), depois o `bench:audit-cost` com as mesmas opções; os dois daemons parados, só o Postgres no ar. Tamanhos: a sequência 1–2–5 de 1.000 até o `ANCHOR_MAX_BATCH_SIZE` (7 tamanhos por padrão, 10 com `ANCHOR_MAX_BATCH_SIZE=1000000` nos dois comandos); 10 repetições por tamanho (3 acima de 100.000).
+
+```bash
+DATABASE_URL=<DSN do app_user> ADMIN_DATABASE_URL=<DSN do admin_user> pnpm --filter anchor-service bench:perf
+DATABASE_URL=<DSN do app_user> ADMIN_DATABASE_URL=<DSN do admin_user> pnpm --filter monitor-service bench:audit-cost
+```
+
+Resultado da execução de 21/10/2026 (1.000 a 100.000 registros, 10 repetições): a auditoria processa cada registro **2,1 a 2,3 vezes mais rápido** que a ancoragem (~0,30 contra ~0,66–0,69 ms por registro). O hash das folhas custa o mesmo nos dois lados e domina os dois; a diferença se divide quase meio a meio entre não verificar as assinaturas e não gerar as provas.

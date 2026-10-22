@@ -230,46 +230,52 @@ Required: `DATABASE_URL`, `RPC_URL`, `ANCHOR_CHAIN_ID` (`loadConfig`, `src/confi
 
 ## 6. Benchmarks
 
-Three tools produce the thesis evidence for the sampling trade-off. All of them write `<prefix>-<timestamp>.{json,csv,meta.json}` into `apps/monitor-service/bench/results/` (git-ignored); the `.meta.json` records the machine (CPU, cores, RAM, OS, Node), the git commit and the run's options. Design: `docs/superpowers/specs/2026-10-18-monitor-benchmarks-design.md`.
+Four tools produce the thesis evidence. All of them write `<prefix>-<timestamp>.{json,csv,meta.json}` into a `bench/results/` directory (git-ignored); the `.meta.json` records the machine (CPU, cores, RAM, OS, Node), the git commit, whether the tree was dirty, and the run's options. They share one methodology: sizes on a 1–2–5 series, one process per measured group, a discarded warm-up, repeated timed runs, and charts showing the mean ± standard deviation. Detailed guides (in Portuguese): `docs/pt-br/BENCHMARK_MONITOR_CUSTO_POR_CICLO.md`, `docs/pt-br/BENCHMARK_MONITOR_DETECCAO.md`, `docs/pt-br/BENCHMARK_ANCORAGEM_VS_AUDITORIA.md`. Designs: `docs/superpowers/specs/2026-10-18-monitor-benchmarks-design.md` and `docs/superpowers/specs/2026-10-20-anchor-vs-audit-cost-design.md`.
 
-### 6.1 Cost benchmark — `bench:perf`
+### 6.1 Cost per cycle — `bench:perf`
 
-Measures cycle time, CPU and peak memory for a full rescan vs sampling (k = 3, and the k that guarantees a 1-hour worst case at a 1-minute cron, k = ⌈M/30⌉), at M = 10, 100 and 1,000 batches of 1,000 records. It runs the real cycle (real Postgres reads, hashing and chain calls) against a view that only sees the first M anchored batches, so one setup serves every size. Each (M, configuration) runs in its own child process, so peak memory doesn't leak between them.
+Measures cycle time, CPU and peak memory for a full rescan vs sampling (k = 3, and the k that guarantees a 1-hour worst case at a 1-minute cron, k = ⌈M/30⌉), at M = 10, 20, 50, 100, 200, 500 and 1,000 batches of 1,000 records. It runs the real cycle (real Postgres reads, hashing and chain calls) against a view that only sees the first M anchored batches, so one setup serves every M. Each (M, configuration) runs in its own child process, with one unmeasured warm-up cycle, then 3 full-rescan or 10 sampling cycles; a cycle that alerts, escalates, skips a batch or checks fewer records than expected invalidates the run.
 
-Setup, once, **with both daemons stopped** (`docker compose stop anchor-service monitor-service`):
-
-1. Fresh chain and empty database: `docker compose --profile local down -v`, then `docker compose --profile local up -d postgres hardhat-node`. A stray root left on the chain (e.g. by the anchor's `bench:cross-chain`) would make the run invalid.
-2. `pnpm --filter anchor-service seed --count 1000000 --type prescription --truncate`
-3. One anchor cycle with `ANCHOR_MAX_BATCH_SIZE=1000` (1,000 confirmed batches).
-
-**Run the anchor's own `bench:perf` before this setup, never after: it truncates the database.**
-
-Run (from `apps/monitor-service`, `DATABASE_URL` pointing at `localhost:5433`):
+Setup, once, **with both daemons stopped**: fresh chain and empty database (`docker compose --profile local down -v`, then `up -d postgres hardhat-node`); `seed --count 1000000`; one anchor cycle with `ANCHOR_MAX_BATCH_SIZE=1000` (and `ANCHOR_POLLING_INTERVAL_MS=100` to anchor faster on the local node). **Run the anchor's own `bench:perf` before this setup, never after: it truncates the database.**
 
 ```bash
 DATABASE_URL=<app_user DSN @localhost:5433> RPC_URL=http://localhost:8545 ANCHOR_CHAIN_ID=31337 \
-  pnpm bench:perf [--batches 10,100,1000] [--batch-size 1000] [--full-cycles 3] [--sampling-cycles 10] [--seed bench-1]
+  pnpm --filter monitor-service bench:perf [--batches 10,20,50,100,200,500,1000] [--batch-size 1000] \
+  [--full-cycles 3] [--sampling-cycles 10] [--seed bench-1] [--log-level warn]
 ```
 
-It refuses to start if fewer than max(M) batches are anchored, if the on-chain batch size differs from `--batch-size`, or if any of those batches isn't `confirmed` in Postgres — printing the setup commands. A cycle that raises an alert or escalates makes the run invalid (the data isn't clean); if a cell fails, the rows already measured are still written and the `.meta.json` records `incomplete`, the failed cell and the error. Expect about 30 minutes, mostly the full rescans at 1,000 batches. Run it twice and check the two agree before charting one.
+About 50 minutes, mostly the full rescans at the larger M.
 
-### 6.2 Detection-latency simulation — `bench:detection`
+### 6.2 Detection latency — `bench:detection`
 
 ```bash
 pnpm --filter monitor-service bench:detection [--trials 10000] [--trials-large 1000] [--seed bench-1]
 ```
 
-Drives the real selector (`createAuditSelector`) with no DB and no chain: each trial tampers a random batch at a random point of a pass and counts cycles until it is audited, for M ∈ {10, 100, 1000}, k ∈ {1, 3, 4, 10, 34, 100}, j ∈ {0, 1}, against a fresh-random-draw baseline. Cells with a pass longer than 100 cycles use `--trials-large`. Output: `monitor-detection` (mean, p50, p95, max next to the theoretical worst case 2L − 1, the continuous mean 7L/12 and the exact discrete mean, computed from the real slice sizes — (7L − 1)(L + 1)/(12L) when k divides M) and `monitor-sizing` (k needed per M for 1 h @ 1 min, 1 h @ 5 min, 1 day @ 5 min). It exits non-zero if any shuffled-pass trial exceeds the safety cap. The full default run takes about 15 minutes.
+Drives the real selector (`createAuditSelector`) with no DB and no chain: each trial tampers a random batch at a random point of a pass and counts cycles until it is audited. Grid: M on the same 1–2–5 series (10 to 1,000), k ∈ {1, 3, 4, 10, 34, 100} plus each M's 1-hour guarantee k, j ∈ {0, 1}, shuffled pass vs a fresh random draw each cycle (160 cells). Output: `monitor-detection` (mean, p50, p95, max, standard deviation and 95% confidence half-width, next to the theoretical worst case 2L − 1, the continuous mean 7L/12 and the exact discrete mean from the real slice sizes) and `monitor-sizing` (k needed per M for 1 h @ 1 min, 1 h @ 5 min, 1 day @ 5 min). It exits non-zero if any shuffled-pass trial exceeds the safety cap. About 30–40 minutes.
 
 ### 6.3 Charts
 
 ```bash
-tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/monitor-service/bench/results
-tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/anchor-service/bench/results [--file <older run>]
+tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/monitor-service/bench/results \
+  [--file apps/anchor-service/bench/results/perf-<timestamp>.json] [--linear]
 ```
 
-Writes PNGs (Portuguese labels) into `<results-dir>/charts/` from the newest run of each kind and prints a suggested caption per chart. Setup and details: `tools/bench-charts/README.md`.
+Writes PNGs (Portuguese labels) into `<results-dir>/charts/` from the newest run of each kind and prints a suggested caption per chart. `--file` pins a specific run (needed for the anchor run in §6.5, which lives in another directory); `--linear` draws the cost-per-cycle and comparison charts on linear axes instead of log. Setup and the full chart list: `tools/bench-charts/README.md`.
 
 ### 6.4 Live cross-check (manual)
 
 To show the simulation matches the real daemon: run it with `MONITOR_AUDIT_MODE=sampling`, `MONITOR_ESCALATE_ON_ANOMALY=false` and `LOG_LEVEL=debug` (the `sampling order` line shows the pass), tamper one record (`pnpm --filter anchor-service tamper edit-record …`), note the cycle, and count the cycles until its `record_tampered` alert. A handful of runs should fall within the simulated distribution and never beyond 2L − 1.
+
+### 6.5 Anchoring vs auditing cost — `bench:audit-cost`
+
+Compares the **processing** time of the same record set on both services, with no chain call: anchoring (the anchor's `bench:perf`: read, signature verification, leaves, tree and proofs) against auditing (read records and proofs, leaves, rebuild the root, i.e. the audit's fast path on an intact set). The audit bench also times, apart from its total, verifying **every** record's proof (`drillDownMs`), the worst case for locating a tampered record; the anchor bench splits its tree step into building the tree and generating the proofs (`treeBuildMs`, `proofsMs`).
+
+Order is fixed: run the anchor's `bench:perf` first (it truncates the database and leaves the largest size's records unanchored), then `bench:audit-cost` with the same options; both daemons stopped, only Postgres needed. Sizes: the 1–2–5 series from 1,000 up to `ANCHOR_MAX_BATCH_SIZE` (7 sizes by default, 10 with `ANCHOR_MAX_BATCH_SIZE=1000000` on both commands); 10 repetitions per size (3 above 100,000).
+
+```bash
+DATABASE_URL=<app_user DSN> ADMIN_DATABASE_URL=<admin_user DSN> pnpm --filter anchor-service bench:perf
+DATABASE_URL=<app_user DSN> ADMIN_DATABASE_URL=<admin_user DSN> pnpm --filter monitor-service bench:audit-cost
+```
+
+Result of the 21/10/2026 run (1,000 to 100,000 records, 10 repetitions): auditing processes each record **2.1–2.3× faster** than anchoring (~0.30 vs ~0.66–0.69 ms per record). Leaf hashing costs the same on both sides and dominates both; the gap splits almost evenly between not verifying signatures and not generating proofs.
