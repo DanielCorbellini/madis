@@ -1,4 +1,9 @@
-import { computeLeafHash, isWhitelistedAddress, verifyClientSignature } from "crypto-utils";
+import {
+  computeLeafHash,
+  computeMerkleRoot,
+  isWhitelistedAddress,
+  verifyClientSignature,
+} from "crypto-utils";
 import { Wallet } from "ethers";
 import { fork } from "node:child_process";
 import path from "node:path";
@@ -35,6 +40,10 @@ interface PerfRow {
   cpuUserMs: number;
   cpuSystemMs: number;
   cpuPercent: number;
+  /** Building the tree alone, measured apart from the pipeline (not part of totalMs). */
+  treeBuildMs: number;
+  /** treeMs minus treeBuildMs: generating (and checking) every record's proof. */
+  proofsMs: number;
   // Every field above is a number — this index signature just makes that
   // explicit to TypeScript so PerfRow[] can be passed to writeResults's
   // Array<Record<string, unknown>> parameter without a cast.
@@ -81,6 +90,18 @@ export function parsePerfArgs(
     repeatsLarge: parseRepeats(values["repeats-large"], "--repeats-large", 3),
     cell: values.cell === undefined ? null : (JSON.parse(values.cell) as PerfCell),
   };
+}
+
+/**
+ * Splits the production tree step (tree + every proof) into its two parts.
+ * Two separate measurements can wobble, so the proofs never go negative.
+ */
+export function splitTreeTime(
+  treeMs: number,
+  treeBuildMs: number,
+): { treeBuildMs: number; proofsMs: number } {
+  const build = Math.min(treeBuildMs, treeMs);
+  return { treeBuildMs: build, proofsMs: treeMs - build };
 }
 
 /**
@@ -160,6 +181,12 @@ async function measurePipeline(
   const { userMs, systemMs } = cpu.stop();
   const peak = tracker.peak();
 
+  // Outside the pipeline's timing: the same tree without proofs, to split treeMs.
+  const { ms: rootOnlyMs } = await timed(async () => {
+    computeMerkleRoot(leaves.map((entry) => entry.leaf));
+  });
+  const split = splitTreeTime(treeMs, rootOnlyMs);
+
   return {
     n,
     scanMs: Math.round(scanMs),
@@ -173,6 +200,8 @@ async function measurePipeline(
     cpuSystemMs: Math.round(systemMs),
     cpuPercent:
       totalMs > 0 ? Math.round(((userMs + systemMs) / totalMs) * 1000) / 10 : 0,
+    treeBuildMs: Math.round(split.treeBuildMs),
+    proofsMs: Math.round(split.proofsMs),
   };
 }
 

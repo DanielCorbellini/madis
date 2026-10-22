@@ -20,7 +20,7 @@ import {
   type RecordRow,
 } from "service-runtime";
 import { streamAnchoredRecords } from "../src/audit-repository.ts";
-import { computeRecordLeaf } from "../src/record-verification.ts";
+import { computeRecordLeaf, verifyAnchoredRecord } from "../src/record-verification.ts";
 
 /** Marks the batches this bench creates, so cleanup never touches real ones. */
 export const BENCH_TX_MARKER = `0x${"be".repeat(32)}`;
@@ -192,7 +192,15 @@ export async function timeAudit(
   app: Pool,
   batchId: number,
   expectedRoot: string,
-): Promise<{ readMs: number; leafMs: number; rootMs: number; totalMs: number; rootMatches: boolean }> {
+): Promise<{
+  readMs: number;
+  leafMs: number;
+  rootMs: number;
+  totalMs: number;
+  rootMatches: boolean;
+  drillDownMs: number;
+  proofsValid: boolean;
+}> {
   const { result: entries, ms: readMs } = await timed(async () => {
     const collected = [];
     for await (const entry of streamAnchoredRecords(app, batchId)) collected.push(entry);
@@ -202,6 +210,11 @@ export async function timeAudit(
     entries.map((entry) => computeRecordLeaf(entry.record)),
   );
   const { result: root, ms: rootMs } = await timed(async () => computeMerkleRoot(leaves));
+  // The path that locates a tampered record: every record's own proof against the anchored
+  // root. It only runs when the root diverges, so it stays out of totalMs.
+  const { result: verifications, ms: drillDownMs } = await timed(async () =>
+    entries.map((entry) => verifyAnchoredRecord(entry.record, entry.proof, expectedRoot)),
+  );
 
   return {
     readMs,
@@ -209,6 +222,8 @@ export async function timeAudit(
     rootMs,
     totalMs: readMs + leafMs + rootMs,
     rootMatches: root === expectedRoot,
+    drillDownMs,
+    proofsValid: verifications.every((verification) => verification.verified),
   };
 }
 
@@ -244,7 +259,7 @@ export async function measureCell(app: Pool, cell: AuditCell, expectedRoot: stri
   memory.sample();
   const { userMs, systemMs } = cpu.stop();
 
-  if (!timing.rootMatches) {
+  if (!timing.rootMatches || !timing.proofsValid) {
     throw new Error(`size ${cell.n}: rebuilt root doesn't match the stored one — the data changed after setup`);
   }
 
@@ -254,6 +269,7 @@ export async function measureCell(app: Pool, cell: AuditCell, expectedRoot: stri
     leafMs: Math.round(timing.leafMs),
     rootMs: Math.round(timing.rootMs),
     totalMs: Math.round(timing.totalMs),
+    drillDownMs: Math.round(timing.drillDownMs),
     cpuUserMs: Math.round(userMs),
     cpuSystemMs: Math.round(systemMs),
     cpuPercent:

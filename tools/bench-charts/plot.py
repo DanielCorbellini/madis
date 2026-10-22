@@ -26,7 +26,7 @@ PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor
 NAME = re.compile(r"^(?P<prefix>.+)-(?P<ts>\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)\.(json|csv)$")
 
 # Categorical slots (validated: CVD-safe on white; slots 3-4 need labels/markers).
-BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
+BLUE, ORANGE, AQUA, YELLOW, MAGENTA = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 DPI = 200
 WIDTH_IN = 6.5  # one Google Docs page width
@@ -170,6 +170,12 @@ def by_config(rows):
     return groups
 
 
+# --linear: size axes drawn linear instead of log (cost-per-cycle and anchor vs audit charts).
+LINEAR = False
+
+THOUSANDS = FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", "."))
+
+
 def config_lines(ax, rows, value, legend_loc="upper left"):
     ends = []
     for config, (label, color, marker) in CONFIGS.items():
@@ -183,12 +189,16 @@ def config_lines(ax, rows, value, legend_loc="upper left"):
         ax.errorbar(ms, means, yerr=spreads, color=color, marker=marker, label=label,
                     capsize=3, elinewidth=1)
         ends.append((ms[-1], means[-1]))
-    ax.set_xscale("log")
+    if LINEAR:
+        ax.set_xlim(left=0)
+        ax.xaxis.set_major_formatter(THOUSANDS)
+    else:
+        ax.set_xscale("log")
     # Zero baseline: a cost axis that starts near the data turns noise into gaps.
     ax.set_ylim(bottom=0, top=ax.get_ylim()[1] * 1.15)
     decimal_comma(ax)
     label_ends(ax, ends)
-    ax.set_xlabel("Lotes ancorados (M, escala log)")
+    ax.set_xlabel("Lotes ancorados (M)" if LINEAR else "Lotes ancorados (M, escala log)")
     ax.legend(loc=legend_loc)
 
 
@@ -375,8 +385,7 @@ def anchor_perf(rows, out_dir, stem):
     # Per record, so every size shares one scale and the phase mix stays readable.
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
     bottom = [0.0] * len(rows)
-    phases = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
-              ("leafMs", "Folhas", AQUA), ("treeMs", "Árvore e provas", YELLOW))
+    phases = anchor_phases(rows)
     for key, label, color in phases:
         values = [r[key] / r["n"] for r in rows]
         ax.bar(labels, values, bottom=bottom, color=color, label=label,
@@ -449,6 +458,15 @@ def anchor_cross_chain(rows, out_dir, stem):
          "Custo e latência de ancoragem de uma raiz por rede (submissões confirmadas).", stem)
 
 
+def anchor_phases(rows):
+    """Tree and proofs apart when the run measured them apart; together for older runs."""
+    common = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
+              ("leafMs", "Folhas", AQUA))
+    if all("treeBuildMs" in r for r in rows):
+        return common + (("treeBuildMs", "Árvore", YELLOW), ("proofsMs", "Provas", MAGENTA))
+    return common + (("treeMs", "Árvore e provas", YELLOW),)
+
+
 def anchor_total_time(raw, out_dir, stem):
     """Total time per batch on linear axes: a straight line means linear cost."""
     ns = sorted(raw)
@@ -481,8 +499,9 @@ def anchor_total_time(raw, out_dir, stem):
 
 def anchor_phase_table(raw, out_dir, stem):
     """Mean time per record in each phase, per size: a summary to paste as a table."""
-    phases = (("scanMs", "Leitura"), ("validateMs", "Assinaturas"), ("leafMs", "Folhas"),
-              ("treeMs", "Árvore e provas"))
+    all_rows = [r for group in raw.values() for r in group]
+    phases = [(key, label.replace("Verificação das assinaturas", "Assinaturas"))
+              for key, label, _ in anchor_phases(all_rows)]
     header = ["Registros"] + [f"{label} (ms/reg)" for _, label in phases] + \
              [f"{label} (%)" for _, label in phases] + ["Total médio (s)", "Desvio (s)", "Repetições"]
     table = []
@@ -512,6 +531,9 @@ def anchor_phase_table(raw, out_dir, stem):
 def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
     anchor = {n: [r["totalMs"] / 1000 for r in g] for n, g in group_by_n(perf_rows).items()}
     audit = {n: [r["totalMs"] / 1000 for r in g] for n, g in group_by_n(audit_rows).items()}
+    has_drill = all("drillDownMs" in r for r in audit_rows)
+    located = {n: [(r["totalMs"] + r["drillDownMs"]) / 1000 for r in g]
+               for n, g in group_by_n(audit_rows).items()} if has_drill else {}
     common = sorted(set(anchor) & set(audit))
     for n in sorted(set(anchor) ^ set(audit)):
         print(f"[aviso] comparacao-ancoragem-auditoria: n = {n} só existe em uma das execuções; ficou de fora")
@@ -533,17 +555,36 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
     ax.errorbar(common, anchor_s, yerr=[spread(anchor[n]) for n in common], color=BLUE,
                 marker="o", label="Ancoragem", capsize=3, elinewidth=1)
     ax.errorbar(common, audit_s, yerr=[spread(audit[n]) for n in common], color=ORANGE,
-                marker="s", label="Auditoria", capsize=3, elinewidth=1)
+                marker="s", label="Auditoria (conjunto íntegro)", capsize=3, elinewidth=1)
+    if has_drill:
+        ax.errorbar(common, [statistics.mean(located[n]) for n in common],
+                    yerr=[spread(located[n]) for n in common], color=AQUA, marker="^",
+                    linestyle="--", label="Auditoria com localização (todas as provas)",
+                    capsize=3, elinewidth=1)
+    last_labeled = None
     for n, a, b in zip(common, anchor_s, audit_s):
+        # On a linear axis the small sizes crowd near zero: label only points with room.
+        if LINEAR and last_labeled is not None and n - last_labeled < 0.06 * common[-1]:
+            continue
+        last_labeled = n
         ratio = f"{a / b:.1f}".replace(".", ",") + "×" if b > 0 else "—"
-        ax.annotate(ratio, (n, a), textcoords="offset points", xytext=(0, 8),
+        top = max(a, statistics.mean(located[n])) if has_drill else a  # above every marker at n
+        ax.annotate(ratio, (n, top), textcoords="offset points", xytext=(0, 10),
                     ha="center", fontsize=8, color=INK_2)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    low, high = ax.get_ylim()
-    ax.set_ylim(low, high * 2)  # room for the ratio labels above the top point
-    ax.set_xlabel("Registros no lote (escala log)")
-    ax.set_ylabel("Tempo de processamento (s, média; escala log)")
+    if LINEAR:
+        ax.set_xlim(left=0)
+        ax.set_ylim(0, ax.get_ylim()[1] * 1.15)  # room for the ratio labels above the top point
+        ax.xaxis.set_major_formatter(THOUSANDS)
+        decimal_comma(ax)
+        ax.set_xlabel("Registros no lote")
+        ax.set_ylabel("Tempo de processamento (s, média)")
+    else:
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        low, high = ax.get_ylim()
+        ax.set_ylim(low, high * 2)  # room for the ratio labels above the top point
+        ax.set_xlabel("Registros no lote (escala log)")
+        ax.set_ylabel("Tempo de processamento (s, média; escala log)")
     ax.set_title("Processamento por conjunto de registros: ancoragem vs auditoria")
     ax.legend(loc="upper left")
 
@@ -553,7 +594,9 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
          "Tempo total para processar um lote com n registros, sem chamadas à blockchain "
          f"({repetitions_text([len(anchor[n]) for n in common] + [len(audit[n]) for n in common])}, "
          "após uma execução de aquecimento descartada; a barra indica o desvio padrão). "
-         "Ancoragem: leitura, verificação das assinaturas, folhas e árvore com a geração e a "
+         + ("A linha tracejada soma ao caminho íntegro a verificação da prova de cada registro, "
+            "o pior caso para localizar um registro adulterado. " if has_drill else "")
+         + "Ancoragem: leitura, verificação das assinaturas, folhas e árvore com a geração e a "
          "conferência da prova de cada registro; auditoria: leitura dos registros e provas, folhas "
          "e reconstrução da raiz. A razão reflete o conjunto dessas diferenças, não só as "
          "assinaturas. O número acima de cada ponto é "
@@ -580,6 +623,8 @@ def main() -> None:
     parser.add_argument("results_dir", type=Path)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--file", type=Path, action="append", default=[])
+    parser.add_argument("--linear", action="store_true",
+                        help="eixos lineares nos gráficos de custo por ciclo e de comparação")
     args = parser.parse_args()
 
     if not args.results_dir.is_dir():
@@ -587,6 +632,8 @@ def main() -> None:
     out_dir = args.out or args.results_dir / "charts"
     out_dir.mkdir(parents=True, exist_ok=True)
     style()
+    global LINEAR
+    LINEAR = args.linear
 
     runs = find_runs(args.results_dir, args.file)
     pinned = {path.with_suffix("") for path in args.file}
