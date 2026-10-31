@@ -19,7 +19,7 @@ const KINDS: NetworkKind[] = ["ethereum", "polygon", "arbitrum"];
 // Polygon PoS finalizes in seconds; Ethereum and Arbitrum take ~15+ minutes.
 const DEFAULT_FINALITY_POLL_MS: Record<NetworkKind, number> = {
   ethereum: 30_000,
-  polygon: 2_000,
+  polygon: 500,
   arbitrum: 30_000,
 };
 
