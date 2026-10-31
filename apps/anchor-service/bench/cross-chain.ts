@@ -12,66 +12,13 @@ import {
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
 import { submitRoot } from "../src/chain-submit.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
+import { parseBenchChains, type CrossChainNetwork } from "./cross-chain/config.ts";
 import { splitReceiptGas } from "./cross-chain/fees.ts";
 
 const DEFAULT_COUNT = 1000;
 const SUBMIT_RETRIES = 2;
 const SUBMIT_MAX_FEE_GWEI = 100;
 const CONFIRMATION_TIMEOUT_MS = 300_000;
-
-export interface BenchChainConfig {
-  name: string;
-  rpcUrl: string;
-  chainId: number;
-  contractAddress: string;
-  privateKey: string;
-  confirmations: number;
-}
-
-/**
- * Parses and validates `BENCH_CHAINS`: a JSON array of per-network configs
- * (one entry per testnet to compare — Sepolia + Amoy per the design doc,
- * §14).
- */
-export function parseBenchChains(raw: string): BenchChainConfig[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("BENCH_CHAINS is not valid JSON");
-  }
-
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error("BENCH_CHAINS must be a non-empty JSON array");
-  }
-
-  return parsed.map((entry, i) => {
-    if (typeof entry !== "object" || entry === null) {
-      throw new Error(`BENCH_CHAINS[${i}] must be an object`);
-    }
-    const e = entry as Record<string, unknown>;
-
-    for (const key of ["name", "rpcUrl", "contractAddress", "privateKey"]) {
-      if (typeof e[key] !== "string" || e[key] === "") {
-        throw new Error(`BENCH_CHAINS[${i}].${key} must be a non-empty string`);
-      }
-    }
-    for (const key of ["chainId", "confirmations"]) {
-      if (typeof e[key] !== "number" || !Number.isInteger(e[key])) {
-        throw new Error(`BENCH_CHAINS[${i}].${key} must be an integer`);
-      }
-    }
-
-    return {
-      name: e.name as string,
-      rpcUrl: e.rpcUrl as string,
-      chainId: e.chainId as number,
-      contractAddress: e.contractAddress as string,
-      privateKey: e.privateKey as string,
-      confirmations: e.confirmations as number,
-    };
-  });
-}
 
 function parseCliArgs(argv: string[]): { count: number; fresh: boolean } {
   const { values } = parseArgs({
@@ -153,7 +100,7 @@ interface CrossChainRow {
  * `"failed"` row instead.
  */
 async function benchmarkChain(
-  chainConfig: BenchChainConfig,
+  chainConfig: CrossChainNetwork,
   root: string,
   size: number,
   runId: string,
@@ -207,7 +154,7 @@ async function benchmarkChain(
 
     const receipt = await chain.provider.waitForTransaction(
       result.tx.hash,
-      chainConfig.confirmations,
+      1,
       CONFIRMATION_TIMEOUT_MS,
     );
     const submitToMinedMs = performance.now() - submitStart;
