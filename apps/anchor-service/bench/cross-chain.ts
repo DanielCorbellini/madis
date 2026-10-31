@@ -3,11 +3,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { assertContractDeployed, assertNetworkMatches, collectRunMetadata, type RunMetadata } from "service-runtime";
+import { JsonRpcProvider } from "ethers";
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
 import { runTick } from "./cross-chain/collect.ts";
 import { parseBenchChains, type CrossChainNetwork } from "./cross-chain/config.ts";
 import { deployGas, readDeployTxHash, type DeployGas } from "./cross-chain/deploy.ts";
-import { anchorOnce, emptyRow, maskSecrets } from "./cross-chain/measure.ts";
+import { anchorOnce, emptyRow, estimateOnMainnet, mainnetSnapshot, maskSecrets } from "./cross-chain/measure.ts";
 import { loadRun, saveRun } from "./cross-chain/run-store.ts";
 import { buildSchedule, classifyTicks, runIdFromDate } from "./cross-chain/schedule.ts";
 import type { CrossChainRow, Tick } from "./cross-chain/types.ts";
@@ -38,30 +39,52 @@ function parseCliArgs(argv: string[]): RunOptions & { run: string | undefined } 
   return { run: values.run, intervalMin, durationH };
 }
 
-/** Startup checks, then the deploy's gas from the Ignition journal (null when it cannot be read). */
+const ARTIFACT = "artifacts/MerkleAnchorRegistry#MerkleAnchorRegistry.json";
+
+/**
+ * Startup checks; loads the registry's bytecode from the network's Ignition
+ * artifact (mainnet gas estimates need it, so a missing artifact stops the
+ * run); then the deploy's testnet gas and its mainnet estimate (null with a
+ * warning when the journal or receipt cannot be read).
+ */
 async function prepareNetwork(net: CrossChainNetwork): Promise<DeployGas | null> {
   const chain = createChainClient({
     rpcUrl: net.rpcUrl,
     contractAddress: net.contractAddress,
     anchorPrivateKey: net.privateKey,
   });
+  const mainnet = new JsonRpcProvider(net.mainnetRpcUrl, net.mainnetChainId, { staticNetwork: true });
+  const deploymentDir = path.join(DEPLOYMENTS_DIR, `chain-${net.chainId}`);
   try {
     await assertNetworkMatches(chain.provider, net.chainId);
+    await assertNetworkMatches(mainnet, net.mainnetChainId);
     await assertContractDeployed(chain.provider, net.contractAddress);
     await assertWalletIsOwner(chain.contract, chain.wallet.address);
+
+    const artifact = JSON.parse(await readFile(path.join(deploymentDir, ARTIFACT), "utf8")) as {
+      bytecode: string;
+      deployedBytecode: string;
+    };
+    net.runtimeBytecode = artifact.deployedBytecode;
+
     try {
-      const journal = await readFile(path.join(DEPLOYMENTS_DIR, `chain-${net.chainId}`, "journal.jsonl"), "utf8");
+      const journal = await readFile(path.join(deploymentDir, "journal.jsonl"), "utf8");
       const txHash = readDeployTxHash(journal);
       const receipt = await chain.provider.getTransactionReceipt(txHash);
       if (!receipt) throw new Error(`deploy transaction ${txHash} not found on chain`);
       const raw = (await chain.provider.send("eth_getTransactionReceipt", [txHash])) as { gasUsedForL1?: string };
-      return deployGas(txHash, receipt, raw);
+      const estimate = await estimateOnMainnet(mainnet, chain.wallet.address, undefined, artifact.bytecode);
+      const l1 = net.kind === "arbitrum"
+        ? (await mainnetSnapshot(net.kind, mainnet, artifact.bytecode, true)).l1GasUsed
+        : null;
+      return deployGas(txHash, receipt, raw, estimate, l1);
     } catch (error) {
       console.warn(`${net.name}: deploy cost unavailable (${maskSecrets(String(error), [net.privateKey])})`);
       return null;
     }
   } finally {
     chain.provider.destroy();
+    mainnet.destroy();
   }
 }
 

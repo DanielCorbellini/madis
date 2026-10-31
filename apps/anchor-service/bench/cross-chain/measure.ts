@@ -1,5 +1,5 @@
 import { computeLeafHash } from "crypto-utils";
-import { Interface, JsonRpcProvider } from "ethers";
+import { Interface, JsonRpcProvider, toBeHex, zeroPadValue } from "ethers";
 import { createChainClient } from "../../src/chain.ts";
 import { submitRoot } from "../../src/chain-submit.ts";
 import { buildAnchorTree, type LeafEntry } from "../../src/tree.ts";
@@ -22,6 +22,8 @@ const INCLUSION_TIMEOUT_MS = 10 * 60_000;
 const FINALITY_TIMEOUT_MS = 3 * 3_600_000;
 const NODE_INTERFACE = "0x00000000000000000000000000000000000000C8";
 const ANY_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+// Where the registry is simulated on mainnet (it is not deployed there).
+const SIMULATED_REGISTRY = "0x000000000000000000000000000000000000bEEF";
 
 const registryAbi = new Interface([
   "function addMerkleRoot(bytes32 root, uint256 batchSize, uint256 batchId) returns (uint256)",
@@ -82,7 +84,7 @@ export async function waitFinalized(
  * The mainnet price an anchoring would pay right now. Ethereum and Polygon:
  * mean base fee and p50 tip of the last 20 blocks. Arbitrum: NodeInterface's
  * L2 base fee (no tip market in practice) plus the L1 data charge for this
- * calldata, in L2 gas units.
+ * calldata (or creation code), in L2 gas units.
  */
 export async function mainnetSnapshot(
   kind: NetworkKind,
@@ -91,11 +93,12 @@ export async function mainnetSnapshot(
     call(tx: { to: string; data: string }): Promise<string>;
   },
   calldata: string,
+  contractCreation = false,
 ): Promise<{ baseFeeWei: bigint; tipWei: bigint; l1GasUsed: bigint | null }> {
   if (kind === "arbitrum") {
     const result = await mainnet.call({
       to: NODE_INTERFACE,
-      data: nodeInterfaceAbi.encodeFunctionData("gasEstimateL1Component", [ANY_ADDRESS, false, calldata]),
+      data: nodeInterfaceAbi.encodeFunctionData("gasEstimateL1Component", [ANY_ADDRESS, contractCreation, calldata]),
     });
     const [gasEstimateForL1, baseFee] = nodeInterfaceAbi.decodeFunctionResult("gasEstimateL1Component", result);
     return { baseFeeWei: baseFee, tipWei: 0n, l1GasUsed: gasEstimateForL1 };
@@ -103,6 +106,47 @@ export async function mainnetSnapshot(
   const history = (await mainnet.send("eth_feeHistory", ["0x14", "latest", [50]])) as FeeHistoryResult;
   const { baseFeeWei, tipWei } = priceFromFeeHistory(history);
   return { baseFeeWei, tipWei, l1GasUsed: null };
+}
+
+export type StateOverride = Record<string, { code: string; stateDiff: Record<string, string> }>;
+
+/**
+ * Simulates the registry at `contractAddress` for `eth_estimateGas`: its
+ * runtime code, `Ownable._owner` (slot 0) and `merkleRoots.length` (slot 1).
+ * The root count matters: the first root initializes the length slot and
+ * costs more than the rest.
+ */
+export function stateOverride(
+  contractAddress: string,
+  runtimeBytecode: string,
+  owner: string,
+  rootCount: number,
+): StateOverride {
+  return {
+    [contractAddress]: {
+      code: runtimeBytecode,
+      stateDiff: {
+        [zeroPadValue("0x00", 32)]: zeroPadValue(owner.toLowerCase(), 32),
+        [zeroPadValue("0x01", 32)]: zeroPadValue(toBeHex(rootCount), 32),
+      },
+    },
+  };
+}
+
+/**
+ * The gas a call (or, without `to`, a contract creation) would use on the
+ * mainnet, whose gas schedule can differ from its testnet's.
+ */
+export async function estimateOnMainnet(
+  mainnet: { send(method: string, params: unknown[]): Promise<unknown> },
+  from: string,
+  to: string | undefined,
+  data: string,
+  override?: StateOverride,
+): Promise<bigint> {
+  const tx = to === undefined ? { from, data } : { from, to, data };
+  const params: unknown[] = override ? [tx, "latest", override] : [tx, "latest"];
+  return BigInt((await mainnet.send("eth_estimateGas", params)) as string);
 }
 
 /** Hides RPC keys embedded in URLs (`/v3/<key>`) and any of the given secrets. */
@@ -168,6 +212,8 @@ export function emptyRow(
     l2GasUsed: null,
     effectiveGasPrice: null,
     testnetFeeWei: null,
+    testnetGasEstimate: null,
+    mainnetGasEstimate: null,
     mainnetBaseFeeWei: null,
     mainnetTipWei: null,
     mainnetL1GasUsed: null,
@@ -212,11 +258,23 @@ export async function anchorOnce(
   };
   const mask = (error: unknown) =>
     maskSecrets(error instanceof Error ? error.message : String(error), [net.privateKey]);
+  // Problems after the send never fail the row; they are kept as notes.
+  const note = (message: string) => {
+    row.errorMessage = row.errorMessage ? `${row.errorMessage}; ${message}` : message;
+  };
 
   try {
-    row.warmUp = (await chain.contract.getRootCount()) === 0;
+    const rootCount = await chain.contract.getRootCount();
+    row.warmUp = rootCount === 0;
     const { root, size } = syntheticRoot(DATASET_SIZE, salt);
     const batchId = tick.at;
+    const calldata = registryAbi.encodeFunctionData("addMerkleRoot", [root, size, batchId]);
+    try {
+      const estimate = await chain.provider.estimateGas({ from: chain.wallet.address, to: net.contractAddress, data: calldata });
+      row.testnetGasEstimate = estimate.toString();
+    } catch (error) {
+      note(`testnet estimate failed: ${mask(error)}`);
+    }
 
     row.sentAt = new Date().toISOString();
     const start = performance.now();
@@ -247,14 +305,23 @@ export async function anchorOnce(
     row.effectiveGasPrice = receipt.gasPrice.toString();
     row.testnetFeeWei = (gas.totalGas * receipt.gasPrice).toString();
 
+    if (net.runtimeBytecode) {
+      try {
+        const override = stateOverride(SIMULATED_REGISTRY, net.runtimeBytecode, chain.wallet.address, rootCount);
+        const estimate = await estimateOnMainnet(mainnet, chain.wallet.address, SIMULATED_REGISTRY, calldata, override);
+        row.mainnetGasEstimate = estimate.toString();
+      } catch (error) {
+        note(`mainnet estimate failed: ${mask(error)}`);
+      }
+    }
+
     try {
-      const calldata = registryAbi.encodeFunctionData("addMerkleRoot", [root, size, batchId]);
       const snap = await mainnetSnapshot(net.kind, mainnet, calldata);
       row.mainnetBaseFeeWei = snap.baseFeeWei.toString();
       row.mainnetTipWei = snap.tipWei.toString();
       row.mainnetL1GasUsed = snap.l1GasUsed === null ? null : snap.l1GasUsed.toString();
     } catch (error) {
-      row.errorMessage = `mainnet snapshot failed: ${mask(error)}`;
+      note(`mainnet snapshot failed: ${mask(error)}`);
     }
 
     // A transient RPC error while waiting counts as "not finalized yet".
@@ -272,7 +339,7 @@ export async function anchorOnce(
     }
     return row;
   } catch (error) {
-    row.errorMessage = mask(error);
+    note(mask(error));
     return row;
   } finally {
     markIncluded();

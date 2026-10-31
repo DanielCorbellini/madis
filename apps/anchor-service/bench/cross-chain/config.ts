@@ -12,6 +12,8 @@ export interface CrossChainNetwork {
   mainnetRpcUrl: string;
   mainnetChainId: number;
   finalityPollMs: number;
+  /** The registry's runtime bytecode, for mainnet gas estimates; set by the collector from the Ignition artifact. */
+  runtimeBytecode?: string;
 }
 
 const KINDS: NetworkKind[] = ["ethereum", "polygon", "arbitrum"];

@@ -19,13 +19,22 @@ export interface DeployGas {
   gasUsed: string;
   l1GasUsed: string;
   l2GasUsed: string;
+  /** The deploy's gas estimated on the mainnet, whose gas schedule can differ from the testnet's. */
+  mainnetGasEstimate: string | null;
+  /** Arbitrum only: the L1 part of that estimate, from NodeInterface. */
+  mainnetL1GasUsed: string | null;
 }
 
-/** The deploy's gas, split like an anchoring's (Arbitrum's `gasUsed` already includes the L1 part). */
+/**
+ * The deploy's testnet gas, split like an anchoring's (Arbitrum's `gasUsed`
+ * already includes the L1 part), next to its mainnet estimate.
+ */
 export function deployGas(
   txHash: string,
   receipt: { gasUsed: bigint },
   rawReceipt: { gasUsedForL1?: string },
+  mainnetGasEstimate: bigint | null,
+  mainnetL1GasUsed: bigint | null,
 ): DeployGas {
   const gas = splitReceiptGas(receipt.gasUsed, rawReceipt);
   return {
@@ -33,5 +42,7 @@ export function deployGas(
     gasUsed: gas.totalGas.toString(),
     l1GasUsed: gas.l1Gas.toString(),
     l2GasUsed: gas.l2Gas.toString(),
+    mainnetGasEstimate: mainnetGasEstimate === null ? null : mainnetGasEstimate.toString(),
+    mainnetL1GasUsed: mainnetL1GasUsed === null ? null : mainnetL1GasUsed.toString(),
   };
 }

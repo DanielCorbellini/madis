@@ -27,6 +27,10 @@ export interface CrossChainRow {
   l2GasUsed: string | null;
   effectiveGasPrice: string | null;
   testnetFeeWei: string | null;
+  /** `eth_estimateGas` for the same call on the testnet, before sending. */
+  testnetGasEstimate: string | null;
+  /** `eth_estimateGas` for the same call on the mainnet, with the contract simulated by a state override. */
+  mainnetGasEstimate: string | null;
   mainnetBaseFeeWei: string | null;
   mainnetTipWei: string | null;
   mainnetL1GasUsed: string | null;
