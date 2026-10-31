@@ -143,14 +143,20 @@ export function syntheticRoot(count: number, salt: string): { root: string; size
   return { root: tree.root, size: tree.entries.length };
 }
 
-function emptyRow(net: CrossChainNetwork, tick: Tick, runId: string): CrossChainRow {
+/** A row with nothing measured yet; `anchorOnce` fills it, and skipped or missed ticks keep it as is. */
+export function emptyRow(
+  net: CrossChainNetwork,
+  tick: Tick,
+  runId: string,
+  status: CrossChainRow["status"] = "failed",
+): CrossChainRow {
   return {
     runId,
     tick: tick.index,
     scheduledAt: new Date(tick.at).toISOString(),
     network: net.name,
     kind: net.kind,
-    status: "failed",
+    status,
     warmUp: false,
     txHash: null,
     blockNumber: null,

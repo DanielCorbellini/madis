@@ -1,246 +1,164 @@
-import { computeLeafHash } from "crypto-utils";
-import { formatEther } from "ethers";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import {
-  assertContractDeployed,
-  assertNetworkMatches,
-  collectRunMetadata,
-  writeResults,
-} from "service-runtime";
+import { assertContractDeployed, assertNetworkMatches, collectRunMetadata, type RunMetadata } from "service-runtime";
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
-import { submitRoot } from "../src/chain-submit.ts";
-import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
+import { runTick } from "./cross-chain/collect.ts";
 import { parseBenchChains, type CrossChainNetwork } from "./cross-chain/config.ts";
-import { splitReceiptGas } from "./cross-chain/fees.ts";
+import { deployGas, readDeployTxHash, type DeployGas } from "./cross-chain/deploy.ts";
+import { anchorOnce, emptyRow, maskSecrets } from "./cross-chain/measure.ts";
+import { loadRun, saveRun } from "./cross-chain/run-store.ts";
+import { buildSchedule, classifyTicks, runIdFromDate } from "./cross-chain/schedule.ts";
+import type { CrossChainRow, Tick } from "./cross-chain/types.ts";
 
-const DEFAULT_COUNT = 1000;
-const SUBMIT_RETRIES = 2;
-const SUBMIT_MAX_FEE_GWEI = 100;
-const CONFIRMATION_TIMEOUT_MS = 300_000;
+const RESULTS_DIR = path.join(import.meta.dirname, "results");
+const DEPLOYMENTS_DIR = path.join(import.meta.dirname, "../../integrity-domain/ignition/deployments");
+const GRACE_MS = 5 * 60_000;
 
-function parseCliArgs(argv: string[]): { count: number; fresh: boolean } {
+interface RunOptions {
+  intervalMin: number;
+  durationH: number;
+}
+
+function parseCliArgs(argv: string[]): RunOptions & { run: string | undefined } {
   const { values } = parseArgs({
     args: argv,
     options: {
-      count: { type: "string" },
-      fresh: { type: "boolean", default: false },
+      run: { type: "string" },
+      "interval-min": { type: "string", default: "45" },
+      "duration-h": { type: "string", default: "24" },
     },
   });
-
-  const count = values.count === undefined ? DEFAULT_COUNT : Number(values.count);
-  if (!Number.isInteger(count) || count <= 0) {
-    throw new Error("--count must be a positive integer");
+  const intervalMin = Number(values["interval-min"]);
+  const durationH = Number(values["duration-h"]);
+  if (!(intervalMin > 0) || !(durationH > 0)) {
+    throw new Error("--interval-min and --duration-h must be positive numbers");
   }
-
-  return { count, fresh: values.fresh === true };
+  return { run: values.run, intervalMin, durationH };
 }
 
-/**
- * Builds a synthetic dataset of `count` leaves and returns its Merkle
- * root/size — no database involved. This experiment only measures
- * submission cost/latency per network, so the underlying data's realism
- * doesn't matter, only that the root is a real Merkle root computed
- * through the same crypto-utils/tree.ts path production uses. `salt` makes
- * a `--fresh` run's leaves (and therefore its root) differ from a previous
- * run's, avoiding `RootAlreadyExists` on every network at once.
- */
-const SYNTHETIC_CREATED_AT = new Date("2026-01-01T00:00:00.000Z");
-
-function buildDataset(count: number, salt: string): { root: string; size: number } {
-  const leaves: LeafEntry[] = [];
-  for (let i = 0; i < count; i++) {
-    leaves.push({
-      recordId: i,
-      leaf: computeLeafHash({
-        id: i,
-        entityId: i,
-        recordType: "prescription",
-        data: { i, salt },
-        version: 1,
-        isDeleted: false,
-        replaces: null,
-        clientAddress: `0x${"1".repeat(40)}`,
-        signature: "0xbench",
-        createdAt: SYNTHETIC_CREATED_AT,
-      }),
-    });
-  }
-  const tree = buildAnchorTree(leaves);
-  return { root: tree.root, size: tree.entries.length };
-}
-
-interface CrossChainRow {
-  runId: string;
-  chain: string;
-  status: "confirmed" | "already-on-chain" | "failed";
-  txHash: string | null;
-  gasUsed: string | null;
-  l1GasUsed: string | null;
-  effectiveGasPrice: string | null;
-  feeWei: string | null;
-  feeNative: string | null;
-  submitToMinedMs: number | null;
-  blockNumber: number | null;
-  errorMessage: string | null;
-  // Every field above is a string, number, or null — this index signature
-  // just makes that explicit to TypeScript so CrossChainRow[] can be passed
-  // to writeResults's Array<Record<string, unknown>> parameter without a cast.
-  [key: string]: string | number | null;
-}
-
-/**
- * Submits the given root to one chain and measures its cost/latency.
- * Reuses `chain-submit.ts`'s `submitRoot` for the actual send (the real
- * production fee-bump/revert path), but reads the confirmed receipt
- * directly off `chain.provider` (the real `JsonRpcProvider`, not the
- * narrower `ChainProvider` interface `chain-confirm.ts` uses) specifically
- * to get `gasUsed`/`gasPrice`. Never throws: every failure is reported as a
- * `"failed"` row instead.
- */
-async function benchmarkChain(
-  chainConfig: CrossChainNetwork,
-  root: string,
-  size: number,
-  runId: string,
-): Promise<CrossChainRow> {
-  const base = {
-    runId,
-    chain: chainConfig.name,
-    txHash: null,
-    gasUsed: null,
-    l1GasUsed: null,
-    effectiveGasPrice: null,
-    feeWei: null,
-    feeNative: null,
-    submitToMinedMs: null,
-    blockNumber: null,
-    errorMessage: null,
-  } as const;
-
+/** Startup checks, then the deploy's gas from the Ignition journal (null when it cannot be read). */
+async function prepareNetwork(net: CrossChainNetwork): Promise<DeployGas | null> {
   const chain = createChainClient({
-    rpcUrl: chainConfig.rpcUrl,
-    contractAddress: chainConfig.contractAddress,
-    anchorPrivateKey: chainConfig.privateKey,
+    rpcUrl: net.rpcUrl,
+    contractAddress: net.contractAddress,
+    anchorPrivateKey: net.privateKey,
   });
-
   try {
-    await assertNetworkMatches(chain.provider, chainConfig.chainId);
-    await assertContractDeployed(chain.provider, chainConfig.contractAddress);
+    await assertNetworkMatches(chain.provider, net.chainId);
+    await assertContractDeployed(chain.provider, net.contractAddress);
     await assertWalletIsOwner(chain.contract, chain.wallet.address);
-
-    const submitStart = performance.now();
-    // Date.now() is unique per script invocation (this function is called once per
-    // chain per run, sharing the same root/size) — good enough to avoid colliding
-    // with a stale batchId from an earlier failed run's addMerkleRoot call.
-    const batchId = Date.now();
-    const result = await submitRoot(
-      chain.contract,
-      chain.provider,
-      root,
-      size,
-      batchId,
-      {
-        retries: SUBMIT_RETRIES,
-        maxFeeGwei: SUBMIT_MAX_FEE_GWEI,
-      },
-    );
-
-    if (result.status === "already-on-chain") {
-      console.log(`${chainConfig.name}: already anchored, skipped`);
-      return { ...base, status: "already-on-chain" };
+    try {
+      const journal = await readFile(path.join(DEPLOYMENTS_DIR, `chain-${net.chainId}`, "journal.jsonl"), "utf8");
+      const txHash = readDeployTxHash(journal);
+      const receipt = await chain.provider.getTransactionReceipt(txHash);
+      if (!receipt) throw new Error(`deploy transaction ${txHash} not found on chain`);
+      const raw = (await chain.provider.send("eth_getTransactionReceipt", [txHash])) as { gasUsedForL1?: string };
+      return deployGas(txHash, receipt, raw);
+    } catch (error) {
+      console.warn(`${net.name}: deploy cost unavailable (${maskSecrets(String(error), [net.privateKey])})`);
+      return null;
     }
-
-    const receipt = await chain.provider.waitForTransaction(
-      result.tx.hash,
-      1,
-      CONFIRMATION_TIMEOUT_MS,
-    );
-    const submitToMinedMs = performance.now() - submitStart;
-
-    if (!receipt || receipt.status === 0) {
-      return {
-        ...base,
-        status: "failed",
-        txHash: result.tx.hash,
-        errorMessage: receipt
-          ? "transaction reverted"
-          : "no receipt after waiting for confirmations",
-      };
-    }
-
-    // ethers' typed TransactionReceipt doesn't model `gasUsedForL1` (the L1
-    // data-posting share rollups like Arbitrum charge on top of L2
-    // execution gas), so it's read off the raw JSON-RPC receipt directly.
-    const rawReceipt = await chain.provider.send("eth_getTransactionReceipt", [
-      result.tx.hash,
-    ]);
-    const { totalGas, l1Gas } = splitReceiptGas(receipt.gasUsed, rawReceipt);
-    const feeWei = totalGas * receipt.gasPrice;
-
-    return {
-      ...base,
-      status: "confirmed",
-      txHash: result.tx.hash,
-      gasUsed: totalGas.toString(),
-      l1GasUsed: l1Gas.toString(),
-      effectiveGasPrice: receipt.gasPrice.toString(),
-      feeWei: feeWei.toString(),
-      feeNative: formatEther(feeWei),
-      submitToMinedMs: Math.round(submitToMinedMs),
-      blockNumber: receipt.blockNumber,
-    };
-  } catch (error) {
-    return {
-      ...base,
-      status: "failed",
-      errorMessage: error instanceof Error ? error.message : String(error),
-    };
   } finally {
     chain.provider.destroy();
   }
 }
 
+/**
+ * The cross-chain collection: one anchoring per network every `intervalMin`
+ * for `durationH`, all networks in the same tick. Every row is saved as soon
+ * as it settles; `--run <runId>` resumes an interrupted run inside its
+ * original window, recording the ticks it missed.
+ */
 async function main(): Promise<void> {
-  const startedAt = new Date();
-  const { count, fresh } = parseCliArgs(process.argv.slice(2));
+  const cli = parseCliArgs(process.argv.slice(2));
+  const raw = process.env.BENCH_CHAINS;
+  if (!raw) throw new Error("BENCH_CHAINS environment variable is required");
+  const nets = parseBenchChains(raw);
 
-  const benchChainsRaw = process.env.BENCH_CHAINS;
-  if (!benchChainsRaw) {
-    throw new Error("BENCH_CHAINS environment variable is required");
+  let runId: string;
+  let options: RunOptions;
+  let windowStart: number;
+  let startedAt: Date;
+  let rows: CrossChainRow[];
+  if (cli.run) {
+    runId = cli.run;
+    const loaded = await loadRun(RESULTS_DIR, runId);
+    if (!loaded) throw new Error(`no run cross-chain-${runId} in ${RESULTS_DIR}`);
+    const saved = JSON.parse(
+      await readFile(path.join(RESULTS_DIR, `cross-chain-${runId}.meta.json`), "utf8"),
+    ) as RunMetadata;
+    const { intervalMin, durationH } = saved.options as unknown as RunOptions;
+    options = { intervalMin, durationH };
+    windowStart = Date.parse(saved.windowStart as string);
+    startedAt = new Date(saved.startedAt);
+    rows = loaded;
+    console.log(`Resuming run ${runId} (${rows.length} rows so far)`);
+  } else {
+    startedAt = new Date();
+    runId = runIdFromDate(startedAt);
+    options = { intervalMin: cli.intervalMin, durationH: cli.durationH };
+    windowStart = startedAt.getTime();
+    rows = [];
   }
-  const chains = parseBenchChains(benchChainsRaw);
 
-  const salt = fresh ? `${Date.now()}` : "fixed";
-  const { root, size } = buildDataset(count, salt);
-  const runId = new Date().toISOString();
-
-  console.log(`Submitting root ${root} (size ${size}) to ${chains.length} chain(s)...`);
-
-  const rows = await Promise.all(
-    chains.map((chainConfig) => benchmarkChain(chainConfig, root, size, runId)),
-  );
-
-  for (const row of rows) {
-    console.log(row);
+  const deploys: Record<string, DeployGas | null> = {};
+  for (const net of nets) {
+    deploys[net.name] = await prepareNetwork(net);
   }
 
-  const { jsonPath, csvPath } = await writeResults(
-    "cross-chain",
-    rows,
-    path.join(import.meta.dirname, "results"),
-    collectRunMetadata(
-      { count, fresh, chains: chains.map((chain) => chain.name) },
+  const durationMs = options.durationH * 3_600_000;
+  const schedule = buildSchedule(windowStart, options.intervalMin * 60_000, durationMs);
+  const meta = (): RunMetadata => ({
+    ...collectRunMetadata(
+      {
+        ...options,
+        networks: nets.map(({ name, kind, chainId, mainnetChainId, contractAddress }) => ({
+          name, kind, chainId, mainnetChainId, contractAddress,
+        })),
+      },
       startedAt,
     ),
-  );
-  console.log(`Wrote ${jsonPath} and ${csvPath}`);
+    deploys,
+    windowStart: new Date(windowStart).toISOString(),
+    windowEnd: new Date(windowStart + durationMs).toISOString(),
+  });
+
+  // Rows settle concurrently; saves are chained so two never write the files at once.
+  let saving = Promise.resolve();
+  const record = (row: CrossChainRow) => {
+    rows.push(row);
+    console.log(`tick ${row.tick} ${row.network}: ${row.status}${row.errorMessage ? ` (${row.errorMessage})` : ""}`);
+    saving = saving.then(() => saveRun(RESULTS_DIR, runId, rows, meta()));
+  };
+
+  const done = new Set(rows.map((row) => row.tick));
+  const { missed, upcoming } = classifyTicks(schedule, done, Date.now(), GRACE_MS);
+  for (const tick of missed) {
+    for (const net of nets) record(emptyRow(net, tick, runId, "missed"));
+  }
+  await saving;
+  console.log(`Run ${runId}: ${upcoming.length} tick(s) to go, every ${options.intervalMin} min. Results in ${RESULTS_DIR}`);
+
+  const busy = new Map<string, boolean>();
+  const anchor = (net: CrossChainNetwork, tick: Tick, onIncluded: () => void) =>
+    anchorOnce(net, tick, runId, `${runId}-${tick.index}-${net.name}`, onIncluded);
+  const ticks: Promise<void>[] = [];
+  for (const tick of upcoming) {
+    const delay = tick.at - Date.now();
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    ticks.push(runTick(nets, tick, runId, busy, anchor, record));
+  }
+  await Promise.all(ticks);
+  await saving;
+  console.log(`Run ${runId} finished: ${rows.length} rows`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  console.log('Tip: run under systemd-inhibit --what=sleep:idle --why="cross-chain bench" so the machine does not suspend.');
   main().catch((error) => {
-    console.error(error);
+    console.error(maskSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error), []));
     process.exit(1);
   });
 }
