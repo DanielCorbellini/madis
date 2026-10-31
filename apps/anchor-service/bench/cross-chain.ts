@@ -12,6 +12,7 @@ import {
 import { assertWalletIsOwner, createChainClient } from "../src/chain.ts";
 import { submitRoot } from "../src/chain-submit.ts";
 import { buildAnchorTree, type LeafEntry } from "../src/tree.ts";
+import { splitReceiptGas } from "./cross-chain/fees.ts";
 
 const DEFAULT_COUNT = 1000;
 const SUBMIT_RETRIES = 2;
@@ -143,30 +144,6 @@ interface CrossChainRow {
 }
 
 /**
- * Combines a transaction's L2 execution gas with its L1 data-posting share.
- * Rollups like Arbitrum charge a separate `gasUsedForL1` on top of the
- * standard `gasUsed` — this is the transaction's pro-rata share of the cost
- * of posting its batch's data back to L1, converted into an L2-gas-priced
- * equivalent so it can be charged at the same `gasPrice`. ethers' typed
- * `TransactionReceipt` doesn't model this field at all, so it's read off the
- * *raw* JSON-RPC receipt. Chains with no such field (Sepolia, Amoy — plain
- * L1s) simply never have it, so this reduces to the plain `gasUsed * gasPrice`
- * everyone already expects.
- */
-export function computeTotalFee(
-  gasUsed: bigint,
-  gasPrice: bigint,
-  rawReceipt: { gasUsedForL1?: string },
-): { totalGasUsed: bigint; l1GasUsed: bigint; feeWei: bigint } {
-  const l1GasUsed = rawReceipt.gasUsedForL1
-    ? BigInt(rawReceipt.gasUsedForL1)
-    : 0n;
-  const totalGasUsed = gasUsed + l1GasUsed;
-  const feeWei = totalGasUsed * gasPrice;
-  return { totalGasUsed, l1GasUsed, feeWei };
-}
-
-/**
  * Submits the given root to one chain and measures its cost/latency.
  * Reuses `chain-submit.ts`'s `submitRoot` for the actual send (the real
  * production fee-bump/revert path), but reads the confirmed receipt
@@ -252,18 +229,15 @@ async function benchmarkChain(
     const rawReceipt = await chain.provider.send("eth_getTransactionReceipt", [
       result.tx.hash,
     ]);
-    const { totalGasUsed, l1GasUsed, feeWei } = computeTotalFee(
-      receipt.gasUsed,
-      receipt.gasPrice,
-      rawReceipt,
-    );
+    const { totalGas, l1Gas } = splitReceiptGas(receipt.gasUsed, rawReceipt);
+    const feeWei = totalGas * receipt.gasPrice;
 
     return {
       ...base,
       status: "confirmed",
       txHash: result.tx.hash,
-      gasUsed: totalGasUsed.toString(),
-      l1GasUsed: l1GasUsed.toString(),
+      gasUsed: totalGas.toString(),
+      l1GasUsed: l1Gas.toString(),
       effectiveGasPrice: receipt.gasPrice.toString(),
       feeWei: feeWei.toString(),
       feeNative: formatEther(feeWei),
