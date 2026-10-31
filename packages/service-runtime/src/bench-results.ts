@@ -71,13 +71,15 @@ function toCsvCell(value: unknown): string {
 /**
  * Writes `rows` as `<prefix>-<timestamp>.{json,csv}` under `resultsDir`
  * (created if missing), plus `<prefix>-<timestamp>.meta.json` when
- * `metadata` is given.
+ * `metadata` is given. A fixed `timestamp` (same format) makes repeated calls
+ * rewrite the same files, for runs saved incrementally.
  */
 export async function writeResults(
   prefix: string,
   rows: Array<Record<string, unknown>>,
   resultsDir: string,
   metadata?: RunMetadata,
+  timestamp: string = new Date().toISOString().replace(/[:.]/g, "-"),
 ): Promise<WriteResultsOutput> {
   if (rows.length === 0) {
     throw new Error(`writeResults("${prefix}", ...) was called with zero rows`);
@@ -85,7 +87,6 @@ export async function writeResults(
 
   await mkdir(resultsDir, { recursive: true });
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const stem = path.join(resultsDir, `${prefix}-${timestamp}`);
   const jsonPath = `${stem}.json`;
   const csvPath = `${stem}.csv`;
