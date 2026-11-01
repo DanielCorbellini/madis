@@ -84,19 +84,22 @@ export async function waitFinalized(
  * The mainnet price an anchoring would pay right now. Ethereum and Polygon:
  * mean base fee and p50 tip of the last 20 blocks. Arbitrum: NodeInterface's
  * L2 base fee (no tip market in practice) plus the L1 data charge for this
- * calldata (or creation code), in L2 gas units.
+ * calldata (or creation code), in L2 gas units. `blockTag` (Arbitrum only)
+ * reads a past block, which needs an archive RPC.
  */
 export async function mainnetSnapshot(
   kind: NetworkKind,
   mainnet: {
     send(method: string, params: unknown[]): Promise<unknown>;
-    call(tx: { to: string; data: string }): Promise<string>;
+    call(tx: { to: string; data: string; blockTag?: number }): Promise<string>;
   },
   calldata: string,
   contractCreation = false,
+  blockTag?: number,
 ): Promise<{ baseFeeWei: bigint; tipWei: bigint; l1GasUsed: bigint | null }> {
   if (kind === "arbitrum") {
     const result = await mainnet.call({
+      ...(blockTag !== undefined && { blockTag }),
       to: NODE_INTERFACE,
       data: nodeInterfaceAbi.encodeFunctionData("gasEstimateL1Component", [ANY_ADDRESS, contractCreation, calldata]),
     });
