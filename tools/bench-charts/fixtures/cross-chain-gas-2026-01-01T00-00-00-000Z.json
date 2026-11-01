@@ -1,0 +1,35 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "anchorings": 31,
+    "anchoringTestnetGas": 473640,
+    "anchoringMainnetGas": 120560,
+    "anchoringTestnetOverMainnet": 3.9286662242866623,
+    "deployTestnetGas": 4442948,
+    "deployMainnetGas": 661743,
+    "deployTestnetOverMainnet": 6.714008308361403
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "anchorings": 31,
+    "anchoringTestnetGas": 134828,
+    "anchoringMainnetGas": 134828,
+    "anchoringTestnetOverMainnet": 1.0,
+    "deployTestnetGas": 658734,
+    "deployMainnetGas": 665129,
+    "deployTestnetOverMainnet": 0.9903853237492276
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "anchorings": 31,
+    "anchoringTestnetGas": 120560,
+    "anchoringMainnetGas": 120560,
+    "anchoringTestnetOverMainnet": 1.0,
+    "deployTestnetGas": 655374,
+    "deployMainnetGas": 661743,
+    "deployTestnetOverMainnet": 0.9903754176470322
+  }
+]

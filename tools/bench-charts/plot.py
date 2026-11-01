@@ -22,7 +22,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing",
-            "monitor-audit-cost"]
+            "monitor-audit-cost", "cross-chain-cost-24h", "cross-chain-annual", "cross-chain-per-record",
+            "cross-chain-summary", "cross-chain-deploy", "cross-chain-gas"]
 NAME = re.compile(r"^(?P<prefix>.+)-(?P<ts>\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)\.(json|csv)$")
 
 # Categorical slots (validated: CVD-safe on white; slots 3-4 need labels/markers).
@@ -170,7 +171,8 @@ def by_config(rows):
     return groups
 
 
-# --linear: size axes drawn linear instead of log (cost-per-cycle and anchor vs audit charts).
+# --linear: size axes drawn linear instead of log (cost-per-cycle and anchor vs audit charts);
+# on the cross-chain cost charts, two linear panels (Ethereum | Polygon + Arbitrum) instead of one log axis.
 LINEAR = False
 
 THOUSANDS = FuncFormatter(lambda v, _: f"{int(v):,}".replace(",", "."))
@@ -434,28 +436,242 @@ def anchor_perf(rows, out_dir, stem):
     save(fig, out_dir, "anchor-perf-cpu-memoria.png", caption, stem)
 
 
-def anchor_cross_chain(rows, out_dir, stem):
-    confirmed = [r for r in rows if r.get("status") == "confirmed"]
-    if not confirmed:
-        return note("cross-chain", "nenhuma submissão confirmada no arquivo (use --file para outra execução)")
-    chains = sorted({r["chain"] for r in confirmed})
-    fig, (fee_ax, time_ax) = plt.subplots(1, 2, figsize=(WIDTH_IN, 3.2))
-    fees = [median([float(r["feeNative"]) for r in confirmed if r["chain"] == c]) for c in chains]
-    times = [median([r["submitToMinedMs"] / 1000 for r in confirmed if r["chain"] == c]) for c in chains]
-    for ax, values, ylabel, title, fmt in (
-        (fee_ax, fees, "Taxa (moeda nativa, mediana)", "Custo por âncora", "{:.2g}"),
-        (time_ax, times, "Envio até mineração (s, mediana)", "Latência", "{:.1f}"),
-    ):
-        bars = ax.bar(chains, values, color=BLUE, width=0.5)
-        ax.bar_label(bars, labels=[fmt.format(v).replace(".", ",") for v in values],
-                     fontsize=7, color=INK_2, padding=2)
-        ax.set_xlim(-0.75, max(len(chains), 2) - 0.25)  # one network: no full-width bar
+# ---------- cross-chain charts ----------
+
+NETWORKS = {  # kind -> (label, color, marker), in legend order
+    "ethereum": ("Ethereum", BLUE, "o"),
+    "arbitrum": ("Arbitrum", AQUA, "^"),
+    "polygon": ("Polygon PoS", ORANGE, "s"),
+}
+MAINNET_NOTE = ("Custo projetado com o gas estimado na mainnet de cada rede e o preço médio "
+                "do gas, do token e da PTAX nos 6 meses anteriores à coleta.")
+
+
+def by_kind(rows):
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["kind"], []).append(row)
+    return {kind: groups[kind] for kind in NETWORKS if kind in groups}
+
+
+def network_label(row) -> str:
+    return f"{NETWORKS[row['kind']][0]} ({row['network']})"
+
+
+def network_axes(height):
+    """Log: one axis for every network. --linear: Ethereum alone on the left and the
+    cheaper two on the right, each panel with its own y-axis."""
+    if not LINEAR:
+        fig, ax = plt.subplots(figsize=(WIDTH_IN, height))
+        return fig, {kind: ax for kind in NETWORKS}, [ax]
+    fig, (left, right) = plt.subplots(1, 2, figsize=(WIDTH_IN, height))
+    return fig, {"ethereum": left, "arbitrum": right, "polygon": right}, [left, right]
+
+
+def money_axis(axes):
+    for ax in axes:
+        if LINEAR:
+            ax.set_ylim(bottom=0)
+        else:
+            ax.set_yscale("log")
         decimal_comma(ax)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
+
+
+def percentile(values, q):
+    ordered = sorted(values)
+    rank = (len(ordered) - 1) * q
+    low, high = math.floor(rank), math.ceil(rank)
+    return ordered[low] + (ordered[high] - ordered[low]) * (rank - low)
+
+
+def reais(value: float) -> str:
+    """R$ with thousands '.' and decimal ',' (two decimals from R$ 1 up, else 3 significant digits)."""
+    if value >= 1:
+        return "R$ " + f"{value:,.2f}".replace(",", "x").replace(".", ",").replace("x", ".")
+    return "R$ " + f"{value:.3g}".replace(".", ",")
+
+
+def seconds_text(value: float) -> str:
+    return f"{value / 60:.1f} min".replace(".", ",") if value >= 120 else f"{value:.1f} s".replace(".", ",")
+
+
+def cross_chain_times(rows, out_dir, stem):
+    anchored = [r for r in rows if r.get("status") in ("finalized", "included")]
+    if not anchored:
+        return note("cross-chain", "nenhuma ancoragem incluída no arquivo (use --file para outra execução)")
+    groups = by_kind(anchored)
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
+    width = 0.36
+    for i, (kind, group) in enumerate(groups.items()):
+        for offset, key, label, color in ((-width / 2, "inclusionMs", "Inclusão", BLUE),
+                                          (width / 2, "finalityMs", "Finalidade", ORANGE)):
+            values = [r[key] / 1000 for r in group if r.get(key) is not None]
+            if not values:
+                continue
+            mid, p95 = percentile(values, 0.5), percentile(values, 0.95)
+            ax.bar(i + offset, mid, width, color=color, label=label if i == 0 else None)
+            ax.plot([i + offset - width / 3, i + offset + width / 3], [p95, p95], color=INK, linewidth=1.2,
+                    label="p95" if i == 0 and key == "finalityMs" else None)
+            # The median's label sits above the p95 marker, so the two never collide.
+            ax.text(i + offset, max(mid, p95) * 1.15, seconds_text(mid), ha="center", va="bottom",
+                    fontsize=7, color=INK_2)
+    ax.set_xticks(range(len(groups)), [network_label(g[0]) for g in groups.values()])
+    ax.set_yscale("log")
+    decimal_comma(ax)
+    ax.set_ylim(top=ax.get_ylim()[1] * 2.5)
+    ax.set_ylabel("Tempo desde o envio (s, escala log)")
+    fig.suptitle("Tempo até a inclusão e até a finalidade por rede", fontsize=11, color=INK)
+    ax.grid(axis="x", visible=False)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3)
+    n = max(len(g) for g in groups.values())
+    hours = read_meta(stem).get("options", {}).get("durationH")
+    window = f" numa coleta de {br(hours)} h" if hours else ""
+    save(fig, out_dir, "entre-redes-tempos.png",
+         f"Mediana do tempo entre o envio da transação e sua inclusão em um bloco (1 confirmação) e "
+         f"até o bloco ser finalizado, em até {n} ancoragens por rede{window} nas redes "
+         "de teste; o traço indica o percentil 95. Tempos medidos por consulta periódica ao nó "
+         "(inclusão a cada 1 s na Ethereum e 250 ms nas demais; finalidade a cada 30 s e 500 ms na "
+         "Polygon), o que acrescenta em média meio intervalo ao valor real.", stem)
+
+
+def cross_chain_cost_24h(rows, out_dir, stem):
+    points = [r for r in rows if not r.get("warmUp")]
+    if not points:
+        return note("cross-chain-cost-24h", "sem ancoragens com custo")
+    start = min(r["scheduledAt"] for r in points)
+    t0 = datetime_ms(start)
+    fig, axes_by_kind, axes = network_axes(3.4)
+    for kind, group in by_kind(points).items():
+        label, color, marker = NETWORKS[kind]
+        hours = [(datetime_ms(r["scheduledAt"]) - t0) / 3_600_000 for r in group]
+        axes_by_kind[kind].plot(hours, [r["costBrl"] for r in group], color=color, marker=marker,
+                                markersize=3, linewidth=1.2, label=network_label(group[0]))
+    money_axis(axes)
+    for ax in axes:
+        ax.set_xlabel("Horas desde o início da coleta")
+        decimal_comma(ax, "x")
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=7)
+    axes[0].set_ylabel("Custo por ancoragem (R$" + (")" if LINEAR else ", escala log)"))
+    fig.suptitle("Custo projetado de cada ancoragem ao longo das 24 h", fontsize=11, color=INK)
+    save(fig, out_dir, "entre-redes-custo-24h.png",
+         "Custo de cada ancoragem da coleta se tivesse sido paga na mainnet no mesmo instante: gas "
+         "estimado na mainnet × preço do gas consultado na mainnet no momento do envio × cotação "
+         "média do token e da PTAX nos 6 meses anteriores (a variação mostrada vem só do preço do "
+         "gas). A primeira ancoragem de cada contrato, mais cara por inicializar o armazenamento, "
+         "foi excluída.", stem)
+
+
+def datetime_ms(text: str) -> float:
+    from datetime import datetime
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp() * 1000
+
+
+def cross_chain_annual(rows, out_dir, stem):
+    groups = by_kind(rows)
+    if not groups:
+        return note("cross-chain-annual", "sem linhas")
+    frequencies = sorted({r["perDay"] for r in rows})
+    fig, axes_by_kind, axes = network_axes(3.6)
+    for ax in axes:
+        own = [k for k in groups if axes_by_kind[k] is ax]
+        width = 0.8 / max(len(own), 1)
+        for j, kind in enumerate(own):
+            label, color, _ = NETWORKS[kind]
+            values = [next(r["annualBrl"] for r in groups[kind] if r["perDay"] == f) for f in frequencies]
+            xs = [i + (j - (len(own) - 1) / 2) * width for i in range(len(frequencies))]
+            bars = ax.bar(xs, values, width, color=color, label=network_label(groups[kind][0]))
+            ax.bar_label(bars, labels=[reais(v) for v in values], fontsize=5.5, color=INK_2,
+                         padding=1, rotation=90)
+        ax.set_xticks(range(len(frequencies)), [str(f) for f in frequencies])
+        ax.set_xlabel("Ancoragens por dia")
         ax.grid(axis="x", visible=False)
-    save(fig, out_dir, "anchor-cross-chain.png",
-         "Custo e latência de ancoragem de uma raiz por rede (submissões confirmadas).", stem)
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=7)
+    money_axis(axes)
+    for ax in axes:  # room for the rotated labels
+        ax.set_ylim(top=ax.get_ylim()[1] * (1.3 if LINEAR else 8))
+    axes[0].set_ylabel("Custo anual (R$" + (")" if LINEAR else ", escala log)"))
+    fig.suptitle("Custo anual projetado por frequência de ancoragem", fontsize=11, color=INK)
+    scenarios = read_meta(stem).get("scenarios", {})
+    ranges = "; ".join(
+        f"{NETWORKS[kind][0]} {reais(scenarios[r['network']]['p10']['brl'])} a "
+        f"{reais(scenarios[r['network']]['p90']['brl'])}"
+        for kind, group in groups.items() for r in group[:1] if r["network"] in scenarios)
+    range_text = f" Faixa por ancoragem (p10 a p90 do custo diário): {ranges}." if ranges else ""
+    save(fig, out_dir, "entre-redes-projecao-anual.png",
+         f"Custo anual de operação (sem o deploy) por número de ancoragens por dia; 8 por dia "
+         f"(a cada 3 h) é o cenário base. {MAINNET_NOTE}{range_text}", stem)
+
+
+def cross_chain_per_record(rows, out_dir, stem):
+    groups = by_kind(rows)
+    if not groups:
+        return note("cross-chain-per-record", "sem linhas")
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
+    for kind, group in groups.items():
+        label, color, marker = NETWORKS[kind]
+        group = sorted(group, key=lambda r: r["batchSize"])
+        ax.plot([r["batchSize"] for r in group], [r["perRecordBrl"] for r in group], color=color,
+                marker=marker, label=network_label(group[0]))
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    decimal_comma(ax)
+    ax.set_xlabel("Registros por lote (escala log)")
+    ax.set_ylabel("Custo por registro (R$, escala log)")
+    ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
+    ax.legend(loc="upper right")
+    save(fig, out_dir, "entre-redes-custo-por-registro.png",
+         f"Custo de uma ancoragem dividido pelo número de registros do lote: o custo da transação "
+         f"não depende do tamanho do lote. {MAINNET_NOTE}", stem)
+
+
+def write_table(out_dir: Path, name: str, header, table, stem, what: str) -> None:
+    path = out_dir / name
+    with path.open("w", newline="") as f:
+        csv.writer(f, delimiter=";").writerows([header] + table)
+    print(f"\n{path}\n  {what} (separada por ';', vírgula decimal). Dados: {stem.name}.csv.")
+
+
+def plain_number(value, decimals=0) -> str:
+    if value is None:
+        return "—"
+    return f"{value:,.{decimals}f}".replace(",", "x").replace(".", ",").replace("x", ".")
+
+
+def cross_chain_summary(rows, out_dir, stem):
+    header = ["Rede", "Custo por ancoragem (R$)", "Custo por ancoragem (US$)", "Custo anual, 8/dia (R$)",
+              "Inclusão, mediana (s)", "Finalidade, mediana (s)", "Finalidade, p95 (s)",
+              "Falhas (%)", "Chamadas RPC por ancoragem", "Modelo de confiança"]
+    table = [[network_label(r), reais(r["costPerAnchoringBrl"]).removeprefix("R$ "),
+              ("US$ " + f"{r['costPerAnchoringUsd']:.3g}".replace(".", ",")).removeprefix("US$ "),
+              reais(r["annualBaseBrl"]).removeprefix("R$ "),
+              plain_number(r["inclusionMedianS"], 1), plain_number(r["finalityMedianS"], 1),
+              plain_number(r["finalityP95S"], 1),
+              plain_number(None if r["failureRate"] is None else 100 * r["failureRate"], 1),
+              plain_number(r["rpcCallsMean"], 0), r["trustModel"]]
+             for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
+    write_table(out_dir, "entre-redes-sintese.csv", header, table, stem,
+                "Tabela de síntese: custo, tempo até a finalidade e modelo de confiança")
+
+
+def cross_chain_deploy(rows, out_dir, stem):
+    header = ["Rede", "Gas na testnet", "Gas na mainnet (estimado)", "Custo (R$)", "Custo (US$)"]
+    table = [[network_label(r), plain_number(r["testnetGasUsed"]), plain_number(r["mainnetGas"]),
+              reais(r["costBrl"]).removeprefix("R$ "), f"{r['costUsd']:.3g}".replace(".", ",")]
+             for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
+    write_table(out_dir, "entre-redes-deploy.csv", header, table, stem,
+                "Custo único de implantação do contrato, com o gas estimado na mainnet")
+
+
+def cross_chain_gas(rows, out_dir, stem):
+    header = ["Rede", "Ancoragem: gas na testnet", "Ancoragem: gas na mainnet", "Testnet/mainnet",
+              "Deploy: gas na testnet", "Deploy: gas na mainnet", "Testnet/mainnet (deploy)"]
+    table = [[network_label(r), plain_number(r["anchoringTestnetGas"]), plain_number(r["anchoringMainnetGas"]),
+              plain_number(r["anchoringTestnetOverMainnet"], 2), plain_number(r["deployTestnetGas"]),
+              plain_number(r["deployMainnetGas"]), plain_number(r["deployTestnetOverMainnet"], 2)]
+             for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
+    write_table(out_dir, "entre-redes-gas.csv", header, table, stem,
+                "Gas medido na rede de teste vs estimado na mainnet (ancoragem média e deploy)")
 
 
 def anchor_phases(rows):
@@ -613,7 +829,13 @@ CHARTS = {
     "monitor-detection": monitor_detection,
     "monitor-sizing": monitor_sizing,
     "perf": anchor_perf,
-    "cross-chain": anchor_cross_chain,
+    "cross-chain": cross_chain_times,
+    "cross-chain-cost-24h": cross_chain_cost_24h,
+    "cross-chain-annual": cross_chain_annual,
+    "cross-chain-per-record": cross_chain_per_record,
+    "cross-chain-summary": cross_chain_summary,
+    "cross-chain-deploy": cross_chain_deploy,
+    "cross-chain-gas": cross_chain_gas,
     # monitor-audit-cost has no chart of its own; it feeds the comparison below.
 }
 

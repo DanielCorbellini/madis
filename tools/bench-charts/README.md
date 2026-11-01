@@ -17,10 +17,10 @@ tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py <results-dir> [--
 
 - `<results-dir>` is `apps/monitor-service/bench/results` or `apps/anchor-service/bench/results`.
 - Charts go to `<results-dir>/charts/` unless `--out` is given.
-- For each kind of result (`perf`, `cross-chain`, `monitor-perf`, `monitor-detection`, `monitor-sizing`, `monitor-audit-cost`), the script charts the **newest** file by its timestamp. `--file` (repeatable) pins a specific run of that kind instead, e.g. an older `perf` run with more sizes.
+- For each kind of result (`perf`, `cross-chain`, `monitor-perf`, `monitor-detection`, `monitor-sizing`, `monitor-audit-cost`, and the cross-chain projection's `cross-chain-cost-24h`, `cross-chain-annual`, `cross-chain-per-record`, `cross-chain-summary`, `cross-chain-deploy`, `cross-chain-gas`), the script charts the **newest** file by its timestamp. `--file` (repeatable) pins a specific run of that kind instead, e.g. an older `perf` run with more sizes.
 - **Runs are never combined.** Each run is already a complete experiment (repeats happen inside it), and mixing runs could silently mix setups. To check stability, run a bench twice, compare, and chart one.
 - Rows are read from the `.json` file. The `.csv` is only a fallback, since the writer doesn't quote commas inside values.
-- A kind with no file, or with no usable rows (a `perf` file with a single size, or a `cross-chain` file with no confirmed submission), is skipped with a `[pulado]` note. The script still exits 0.
+- A kind with no file, or with no usable rows (a `perf` file with a single size, or a `cross-chain` run with no included anchoring), is skipped with a `[pulado]` note. The script still exits 0.
 - For each chart it prints a suggested Portuguese caption, including the source file and a one-line machine summary from the run's `.meta.json`.
 
 | Chart | From |
@@ -29,8 +29,24 @@ tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py <results-dir> [--
 | `monitor-deteccao-vs-k.png`, `monitor-estrategias.png` | `monitor-detection` |
 | `monitor-dimensionamento.png` | `monitor-sizing` |
 | `anchor-perf-fases.png`, `anchor-perf-cpu-memoria.png` | `perf` |
-| `anchor-cross-chain.png` | `cross-chain` |
+| `entre-redes-tempos.png` | `cross-chain` (the collection run) |
+| `entre-redes-custo-24h.png` | `cross-chain-cost-24h` |
+| `entre-redes-projecao-anual.png` | `cross-chain-annual` (p10–p90 range in the caption, from its `.meta.json`) |
+| `entre-redes-custo-por-registro.png` | `cross-chain-per-record` |
+| `entre-redes-sintese.csv`, `entre-redes-deploy.csv`, `entre-redes-gas.csv` | `cross-chain-summary`, `cross-chain-deploy`, `cross-chain-gas` |
 | `comparacao-ancoragem-auditoria.png` | `perf` + `monitor-audit-cost` together |
+
+### Cross-chain comparison
+
+The collection run and the projection tables live in `apps/anchor-service/bench/results`. Chart them from there, pinning the official run and projection with `--file` (all six projection files share one timestamp):
+
+```bash
+tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py apps/anchor-service/bench/results \
+  --file apps/anchor-service/bench/results/cross-chain-<runId>.json \
+  --file apps/anchor-service/bench/results/cross-chain-annual-<timestamp>.json  # …and the other five
+```
+
+The cost charts are on a log y-axis; with `--linear` they become two linear panels (Ethereum on the left, Polygon and Arbitrum on the right, each with its own axis). The times chart is always log.
 
 ### Anchoring vs auditing comparison
 

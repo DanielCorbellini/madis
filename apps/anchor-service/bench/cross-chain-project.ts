@@ -63,9 +63,9 @@ async function main(): Promise<void> {
     }
     const projection = projectNetwork(days, gas);
     scenarios[name] = { ...projection, anchoringsUsed: gas.n };
-    summary.push(summaryRow(name, kind, projection, rows));
-    annual.push(...annualRows(name, projection.mean));
-    perRecord.push(...perRecordRows(name, projection.mean));
+    summary.push({ kind, ...summaryRow(name, kind, projection, rows) });
+    annual.push(...annualRows(name, projection.mean).map((row) => ({ kind, ...row })));
+    perRecord.push(...perRecordRows(name, projection.mean).map((row) => ({ kind, ...row })));
 
     const deploy = deploys[name];
     const deployMainnet = deploy?.mainnetGasEstimate ? Number(deploy.mainnetGasEstimate) : null;
@@ -73,6 +73,7 @@ async function main(): Promise<void> {
       const l1 = deploy.mainnetL1GasUsed ? Number(deploy.mainnetL1GasUsed) : 0;
       const cost = deployCost(days, { total: deployMainnet, l2: deployMainnet - l1 });
       deployRows.push({
+        kind,
         network: name,
         testnetGasUsed: Number(deploy.gasUsed),
         mainnetGas: deployMainnet,
@@ -84,6 +85,7 @@ async function main(): Promise<void> {
     }
 
     gasRows.push({
+      kind,
       network: name,
       anchorings: gas.n,
       anchoringTestnetGas: gas.testnet,
@@ -97,7 +99,7 @@ async function main(): Promise<void> {
     const meanPrices = { tokenUsd: mean(days.map((d) => d.tokenUsd)), ptax: mean(days.map((d) => d.ptax)) };
     for (const row of rows.filter((r) => r.network === name)) {
       const point = cost24hRow(row, meanPrices);
-      if (point) cost24h.push(point);
+      if (point) cost24h.push({ kind, ...point });
     }
   }
 
