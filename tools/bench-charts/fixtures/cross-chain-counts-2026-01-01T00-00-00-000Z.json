@@ -1,0 +1,44 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "scheduled": 32,
+    "warmUp": 1,
+    "finalized": 31,
+    "included": 0,
+    "failed": 1,
+    "missed": 0,
+    "skippedBusy": 0,
+    "rpcCallsMean": 40.5,
+    "rpcCallsMax": 67,
+    "rpcCallsTotal": 1296
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "scheduled": 32,
+    "warmUp": 1,
+    "finalized": 32,
+    "included": 0,
+    "failed": 0,
+    "missed": 0,
+    "skippedBusy": 0,
+    "rpcCallsMean": 40.5,
+    "rpcCallsMax": 67,
+    "rpcCallsTotal": 1296
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "scheduled": 32,
+    "warmUp": 1,
+    "finalized": 32,
+    "included": 0,
+    "failed": 0,
+    "missed": 0,
+    "skippedBusy": 0,
+    "rpcCallsMean": 40.5,
+    "rpcCallsMax": 67,
+    "rpcCallsTotal": 1296
+  }
+]

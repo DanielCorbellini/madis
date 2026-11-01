@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -69,6 +69,17 @@ function toCsvCell(value: unknown): string {
 }
 
 /**
+ * Writes through a temporary file and a rename, so an interruption (a crash
+ * or a power loss) leaves either the previous file or the new one, never a
+ * truncated one that a resumed run could not read.
+ */
+async function writeAtomically(file: string, content: string): Promise<void> {
+  const temporary = `${file}.tmp`;
+  await writeFile(temporary, content);
+  await rename(temporary, file);
+}
+
+/**
  * Writes `rows` as `<prefix>-<timestamp>.{json,csv}` under `resultsDir`
  * (created if missing), plus `<prefix>-<timestamp>.meta.json` when
  * `metadata` is given. A fixed `timestamp` (same format) makes repeated calls
@@ -91,19 +102,19 @@ export async function writeResults(
   const jsonPath = `${stem}.json`;
   const csvPath = `${stem}.csv`;
 
-  await writeFile(jsonPath, JSON.stringify(rows, null, 2));
+  await writeAtomically(jsonPath, JSON.stringify(rows, null, 2));
 
   const header = Object.keys(rows[0]);
   const lines = [
     header.join(","),
     ...rows.map((row) => header.map((key) => toCsvCell(row[key])).join(",")),
   ];
-  await writeFile(csvPath, `${lines.join("\n")}\n`);
+  await writeAtomically(csvPath, `${lines.join("\n")}\n`);
 
   let metaPath: string | null = null;
   if (metadata) {
     metaPath = `${stem}.meta.json`;
-    await writeFile(metaPath, JSON.stringify(metadata, null, 2));
+    await writeAtomically(metaPath, JSON.stringify(metadata, null, 2));
   }
 
   return { jsonPath, csvPath, metaPath };

@@ -17,7 +17,10 @@ const INCLUSION_POLL_MS: Record<NetworkKind, number> = {
   polygon: 250,
   arbitrum: 250,
 };
-const INCLUSION_TIMEOUT_MS = 10 * 60_000;
+// A transaction not yet included keeps its network busy (later ticks are
+// skipped, not queued behind it on the nonce), so the wait is as long as
+// finality's: giving up early would orphan a transaction still in the mempool.
+const INCLUSION_TIMEOUT_MS = 3 * 3_600_000;
 // Arbitrum Sepolia's batch posting can lag well behind Ethereum's finality.
 const FINALITY_TIMEOUT_MS = 3 * 3_600_000;
 const NODE_INTERFACE = "0x00000000000000000000000000000000000000C8";
@@ -232,15 +235,16 @@ export function emptyRow(
  * confirmation), gas, the mainnet price at that moment, and finality. Uses
  * its own providers so overlapping anchorings never mix RPC counts. Never
  * throws: errors become a `failed` row (or an error note on an included one).
- * `onIncluded` fires once, when the transaction is included or the attempt
- * ends without inclusion.
+ * `onIncluded` fires once: with a provisional `included` row once the
+ * transaction is included and measured (before the finality wait), or with
+ * nothing when the attempt ends without inclusion.
  */
 export async function anchorOnce(
   net: CrossChainNetwork,
   tick: Tick,
   runId: string,
   salt: string,
-  onIncluded: () => void = () => {},
+  onIncluded: (provisional?: CrossChainRow) => void = () => {},
 ): Promise<CrossChainRow> {
   const row = emptyRow(net, tick, runId);
   const chain = createChainClient({
@@ -253,10 +257,10 @@ export async function anchorOnce(
   const testnetCalls = countRpcCalls(chain.provider);
   const mainnetCalls = countRpcCalls(mainnet);
   let included = false;
-  const markIncluded = () => {
+  const markIncluded = (provisional?: CrossChainRow) => {
     if (!included) {
       included = true;
-      onIncluded();
+      onIncluded(provisional);
     }
   };
   const mask = (error: unknown) =>
@@ -290,7 +294,6 @@ export async function anchorOnce(
 
     const receipt = await chain.provider.waitForTransaction(result.tx.hash, 1, INCLUSION_TIMEOUT_MS);
     row.inclusionMs = Math.round(performance.now() - start);
-    markIncluded();
     if (!receipt || receipt.status === 0) {
       row.errorMessage = receipt ? "transaction reverted" : "not included before the timeout";
       return row;
@@ -326,6 +329,9 @@ export async function anchorOnce(
     } catch (error) {
       note(`mainnet snapshot failed: ${mask(error)}`);
     }
+
+    markIncluded({ ...row, rpcCallsTestnet: testnetCalls.total(), rpcCallsMainnet: mainnetCalls.total(),
+      sends: testnetCalls.method("eth_sendRawTransaction") });
 
     // A transient RPC error while waiting counts as "not finalized yet".
     const finalizedNumber = async () => {

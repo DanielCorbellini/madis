@@ -10,7 +10,7 @@ import { parseBenchChains, type CrossChainNetwork } from "./cross-chain/config.t
 import { deployGas, readDeployTxHash, type DeployGas } from "./cross-chain/deploy.ts";
 import { anchorOnce, emptyRow, estimateOnMainnet, mainnetSnapshot, maskSecrets } from "./cross-chain/measure.ts";
 import { loadRun, saveRun } from "./cross-chain/run-store.ts";
-import { buildSchedule, classifyTicks, runIdFromDate } from "./cross-chain/schedule.ts";
+import { buildSchedule, classifyTicks, isOverdue, resumePlan, runIdFromDate } from "./cross-chain/schedule.ts";
 import type { CrossChainRow, Tick } from "./cross-chain/types.ts";
 
 const RESULTS_DIR = path.join(import.meta.dirname, "results");
@@ -149,28 +149,43 @@ async function main(): Promise<void> {
   });
 
   // Rows settle concurrently; saves are chained so two never write the files at once.
+  // A row arrives twice (provisional at inclusion, final after finality): the later replaces the earlier.
   let saving = Promise.resolve();
   const record = (row: CrossChainRow) => {
-    rows.push(row);
+    const at = rows.findIndex((r) => r.tick === row.tick && r.network === row.network);
+    if (at >= 0) rows[at] = row;
+    else rows.push(row);
     console.log(`tick ${row.tick} ${row.network}: ${row.status}${row.errorMessage ? ` (${row.errorMessage})` : ""}`);
     saving = saving.then(() => saveRun(RESULTS_DIR, runId, rows, meta()));
   };
 
-  const done = new Set(rows.map((row) => row.tick));
-  const { missed, upcoming } = classifyTicks(schedule, done, Date.now(), GRACE_MS);
-  for (const tick of missed) {
-    for (const net of nets) record(emptyRow(net, tick, runId, "missed"));
+  const missed = (tick: Tick, network: CrossChainNetwork) => record(emptyRow(network, tick, runId, "missed"));
+  let upcoming: Tick[];
+  if (cli.run) {
+    const plan = resumePlan(schedule, rows, nets.map((net) => net.name), Date.now());
+    for (const pair of plan.missed) {
+      const net = nets.find((n) => n.name === pair.network);
+      if (net) missed(schedule[pair.tick], net);
+    }
+    upcoming = plan.upcoming;
+  } else {
+    upcoming = classifyTicks(schedule, new Set(), Date.now(), GRACE_MS).upcoming;
   }
   await saving;
   console.log(`Run ${runId}: ${upcoming.length} tick(s) to go, every ${options.intervalMin} min. Results in ${RESULTS_DIR}`);
 
   const busy = new Map<string, boolean>();
-  const anchor = (net: CrossChainNetwork, tick: Tick, onIncluded: () => void) =>
+  const anchor = (net: CrossChainNetwork, tick: Tick, onIncluded: (provisional?: CrossChainRow) => void) =>
     anchorOnce(net, tick, runId, `${runId}-${tick.index}-${net.name}`, onIncluded);
   const ticks: Promise<void>[] = [];
   for (const tick of upcoming) {
     const delay = tick.at - Date.now();
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    // After a suspend the timer fires late: the tick's moment has passed, so it is missed, not run.
+    if (isOverdue(tick, Date.now(), GRACE_MS)) {
+      for (const net of nets) missed(tick, net);
+      continue;
+    }
     ticks.push(runTick(nets, tick, runId, busy, anchor, record));
   }
   await Promise.all(ticks);
@@ -179,7 +194,9 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  console.log('Tip: run under systemd-inhibit --what=sleep:idle --why="cross-chain bench" so the machine does not suspend.');
+  console.log(
+    'Tip: run under systemd-inhibit --what=sleep:idle:handle-lid-switch --why="cross-chain bench" so the machine does not suspend.',
+  );
   main().catch((error) => {
     console.error(maskSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error), []));
     process.exit(1);

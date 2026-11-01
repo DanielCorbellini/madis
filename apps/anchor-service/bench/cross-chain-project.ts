@@ -13,6 +13,8 @@ import {
   meanGas,
   perRecordRows,
   projectNetwork,
+  runCounts,
+  statsRows,
   summaryRow,
 } from "./cross-chain/projection.ts";
 import { runIdFromDate } from "./cross-chain/schedule.ts";
@@ -27,7 +29,8 @@ const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / value
 /**
  * Combines a collection run (gas, times, snapshots) with a cached price
  * history into the section's tables: summary, annual cost per frequency, cost
- * per record, deploy cost, testnet vs mainnet gas, and the 24-hour cost line.
+ * per record, deploy cost, testnet vs mainnet gas, the 24-hour cost line, the
+ * spec's per-network statistics and the run's outcome counts.
  * All share one timestamp so plot.py can pin them together.
  */
 async function main(): Promise<void> {
@@ -52,6 +55,8 @@ async function main(): Promise<void> {
   const deployRows = [];
   const gasRows = [];
   const cost24h = [];
+  const stats = [];
+  const counts = [];
   const scenarios: Record<string, unknown> = {};
 
   for (const { name, kind } of networks) {
@@ -97,10 +102,14 @@ async function main(): Promise<void> {
     });
 
     const meanPrices = { tokenUsd: mean(days.map((d) => d.tokenUsd)), ptax: mean(days.map((d) => d.ptax)) };
+    const points = [];
     for (const row of rows.filter((r) => r.network === name)) {
       const point = cost24hRow(row, meanPrices);
-      if (point) cost24h.push({ kind, ...point });
+      if (point) points.push({ kind, ...point });
     }
+    cost24h.push(...points);
+    stats.push(...statsRows(name, rows, points).map((row) => ({ kind, ...row })));
+    counts.push({ kind, ...runCounts(name, rows) });
   }
 
   const timestamp = runIdFromDate(startedAt);
@@ -117,6 +126,8 @@ async function main(): Promise<void> {
     ["cross-chain-deploy", deployRows],
     ["cross-chain-gas", gasRows],
     ["cross-chain-cost-24h", cost24h],
+    ["cross-chain-stats", stats],
+    ["cross-chain-counts", counts],
   ];
   for (const [prefix, data] of outputs) {
     if (data.length === 0) {

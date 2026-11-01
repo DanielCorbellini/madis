@@ -1,6 +1,6 @@
 import { oneTwoFive } from "service-runtime";
 import type { HistoryDay } from "./history.ts";
-import { percentile } from "./stats.ts";
+import { percentile, summarize } from "./stats.ts";
 import type { CrossChainRow, NetworkKind } from "./types.ts";
 
 export interface Cost {
@@ -115,7 +115,8 @@ export function deployCost(days: HistoryDay[], gas: Gas): Cost {
 
 /** The decision table's row: cost next to time to finality and trust model. */
 export function summaryRow(network: string, kind: NetworkKind, projection: Projection, rows: CrossChainRow[]) {
-  const own = rows.filter((row) => row.network === network);
+  // The warm-up is recorded but kept out of every statistic (spec §4).
+  const own = rows.filter((row) => row.network === network && !row.warmUp);
   const attempted = own.filter((row) => row.status !== "missed" && row.status !== "skipped-busy");
   const seconds = (values: (number | null)[]) =>
     values.filter((v): v is number => v !== null).map((v) => v / 1000);
@@ -161,4 +162,45 @@ export function blobSummary(days: HistoryDay[]): { meanWei: number; p90Wei: numb
   const fees = days.flatMap((day) => (day.blobBaseFeeWei === null ? [] : [Number(day.blobBaseFeeWei)]));
   if (fees.length === 0) return null;
   return { meanWei: mean(fees), p90Wei: percentile(fees, 0.9), maxWei: Math.max(...fees) };
+}
+
+/**
+ * Spec §6: n, mean, standard deviation, median, p95, min and max of the
+ * inclusion time, the finality time (both in seconds) and the snapshot cost
+ * per anchoring, warm-up excluded.
+ */
+export function statsRows(
+  network: string,
+  rows: CrossChainRow[],
+  costPoints: { network: string; warmUp: boolean; costBrl: number }[],
+) {
+  const own = rows.filter((row) => row.network === network && !row.warmUp);
+  const series: [string, number[]][] = [
+    ["inclusionS", own.filter(anchored).flatMap((r) => (r.inclusionMs === null ? [] : [r.inclusionMs / 1000]))],
+    ["finalityS", own.filter((r) => r.status === "finalized").flatMap((r) => (r.finalityMs === null ? [] : [r.finalityMs / 1000]))],
+    ["costBrl", costPoints.filter((p) => p.network === network && !p.warmUp).map((p) => p.costBrl)],
+  ];
+  return series.filter(([, values]) => values.length > 0).map(([metric, values]) => ({ network, metric, ...summarize(values) }));
+}
+
+/** Every outcome of the run for one network, and the RPC calls of its attempted anchorings. */
+export function runCounts(network: string, rows: CrossChainRow[]) {
+  const own = rows.filter((row) => row.network === network);
+  const count = (status: CrossChainRow["status"]) => own.filter((row) => row.status === status).length;
+  const calls = own
+    .filter((row) => row.status !== "missed" && row.status !== "skipped-busy")
+    .map((row) => row.rpcCallsTestnet + row.rpcCallsMainnet);
+  return {
+    network,
+    scheduled: own.length,
+    warmUp: own.filter((row) => row.warmUp).length,
+    finalized: count("finalized"),
+    included: count("included"),
+    failed: count("failed"),
+    missed: count("missed"),
+    skippedBusy: count("skipped-busy"),
+    rpcCallsMean: calls.length ? mean(calls) : null,
+    rpcCallsMax: calls.length ? Math.max(...calls) : null,
+    rpcCallsTotal: calls.reduce((sum, n) => sum + n, 0),
+  };
 }

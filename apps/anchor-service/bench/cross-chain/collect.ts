@@ -8,10 +8,11 @@ import type { CrossChainRow, NetworkKind, Tick } from "./types.ts";
 const SEND_ORDER: NetworkKind[] = ["arbitrum", "polygon", "ethereum"];
 export const STAGGER_MS = 5_000;
 
+/** `onIncluded` frees the network for the next tick; given a row, that row is saved provisionally. */
 export type AnchorFn = (
   net: CrossChainNetwork,
   tick: Tick,
-  onIncluded: () => void,
+  onIncluded: (provisional?: CrossChainRow) => void,
 ) => Promise<CrossChainRow>;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -19,8 +20,10 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 /**
  * Runs one tick on every network. A network still waiting for its previous
  * anchoring's inclusion is recorded as `skipped-busy` (sending would collide
- * on the nonce); a finality wait does not block the next tick. Each row is
- * handed to `onRow` as soon as it settles; resolves when all have.
+ * on the nonce); a finality wait does not block the next tick. A row is
+ * handed to `onRow` at inclusion (provisional, so an interruption during the
+ * finality wait keeps the paid anchoring) and again when it settles; resolves
+ * when all have.
  */
 export async function runTick(
   nets: CrossChainNetwork[],
@@ -42,8 +45,12 @@ export async function runTick(
     }
     busy.set(net.name, true);
     const release = () => busy.set(net.name, false);
+    const included = (provisional?: CrossChainRow) => {
+      release();
+      if (provisional) onRow(provisional);
+    };
     pending.push(
-      anchor(net, tick, release)
+      anchor(net, tick, included)
         .then(onRow)
         .finally(release),
     );

@@ -23,7 +23,8 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing",
             "monitor-audit-cost", "cross-chain-cost-24h", "cross-chain-annual", "cross-chain-per-record",
-            "cross-chain-summary", "cross-chain-deploy", "cross-chain-gas"]
+            "cross-chain-summary", "cross-chain-deploy", "cross-chain-gas", "cross-chain-stats",
+            "cross-chain-counts"]
 NAME = re.compile(r"^(?P<prefix>.+)-(?P<ts>\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)\.(json|csv)$")
 
 # Categorical slots (validated: CVD-safe on white; slots 3-4 need labels/markers).
@@ -674,6 +675,30 @@ def cross_chain_gas(rows, out_dir, stem):
                 "Gas medido na rede de teste vs estimado na mainnet (ancoragem média e deploy)")
 
 
+METRICS = {"inclusionS": "Inclusão (s)", "finalityS": "Finalidade (s)", "costBrl": "Custo por ancoragem no instante (R$)"}
+
+
+def cross_chain_stats(rows, out_dir, stem):
+    header = ["Rede", "Medida", "n", "Média", "Desvio padrão", "Mediana", "p95", "Mínimo", "Máximo"]
+    decimals = {"inclusionS": 1, "finalityS": 1, "costBrl": 4}
+    table = [[network_label(r), METRICS[r["metric"]], str(r["n"])]
+             + [plain_number(r[k], decimals[r["metric"]]) for k in ("mean", "stdev", "median", "p95", "min", "max")]
+             for r in sorted(rows, key=lambda r: (list(NETWORKS).index(r["kind"]), list(METRICS).index(r["metric"])))]
+    write_table(out_dir, "entre-redes-estatisticas.csv", header, table, stem,
+                "Estatísticas por rede (sem a ancoragem de aquecimento)")
+
+
+def cross_chain_counts(rows, out_dir, stem):
+    header = ["Rede", "Horários", "Aquecimento", "Finalizadas", "Só incluídas", "Falhas", "Perdidas",
+              "Puladas (rede ocupada)", "Chamadas RPC: média", "Chamadas RPC: máximo", "Chamadas RPC: total"]
+    table = [[network_label(r)] + [str(r[k]) for k in ("scheduled", "warmUp", "finalized", "included", "failed",
+                                                        "missed", "skippedBusy")]
+             + [plain_number(r["rpcCallsMean"], 1), plain_number(r["rpcCallsMax"]), plain_number(r["rpcCallsTotal"])]
+             for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
+    write_table(out_dir, "entre-redes-contagens.csv", header, table, stem,
+                "Resultado de cada horário da coleta e uso de RPC por rede")
+
+
 def anchor_phases(rows):
     """Tree and proofs apart when the run measured them apart; together for older runs."""
     common = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
@@ -836,6 +861,8 @@ CHARTS = {
     "cross-chain-summary": cross_chain_summary,
     "cross-chain-deploy": cross_chain_deploy,
     "cross-chain-gas": cross_chain_gas,
+    "cross-chain-stats": cross_chain_stats,
+    "cross-chain-counts": cross_chain_counts,
     # monitor-audit-cost has no chart of its own; it feeds the comparison below.
 }
 
