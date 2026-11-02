@@ -1,4 +1,4 @@
-kind,network,scheduled,warmUp,finalized,included,failed,missed,skippedBusy,rpcCallsMean,rpcCallsMax,rpcCallsTotal
-ethereum,sepolia,32,1,31,0,1,0,0,40.5,67,1296
-polygon,amoy,32,1,32,0,0,0,0,40.5,67,1296
-arbitrum,arbitrum-sepolia,32,1,32,0,0,0,0,40.5,67,1296
+kind,network,scheduled,warmUp,finalized,included,failed,providerRefused,missed,skippedBusy,rpcCallsMean,rpcCallsMax,rpcCallsTotal
+ethereum,sepolia,32,1,31,0,0,1,0,0,40.5,67,1296
+polygon,amoy,32,1,32,0,0,0,0,0,40.5,67,1296
+arbitrum,arbitrum-sepolia,32,1,32,0,0,0,0,0,40.5,67,1296

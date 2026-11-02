@@ -642,7 +642,7 @@ def plain_number(value, decimals=0) -> str:
 def cross_chain_summary(rows, out_dir, stem):
     header = ["Rede", "Custo por ancoragem (R$)", "Custo por ancoragem (US$)", "Custo anual, 8/dia (R$)",
               "Inclusão, mediana (s)", "Finalidade, mediana (s)", "Finalidade, p95 (s)",
-              "Falhas (%)", "Chamadas RPC por ancoragem", "Modelo de confiança"]
+              "Falhas da rede (%)", "Chamadas RPC por ancoragem", "Modelo de confiança"]
     table = [[network_label(r), reais(r["costPerAnchoringBrl"]).removeprefix("R$ "),
               ("US$ " + f"{r['costPerAnchoringUsd']:.3g}".replace(".", ",")).removeprefix("US$ "),
               reais(r["annualBaseBrl"]).removeprefix("R$ "),
@@ -689,14 +689,16 @@ def cross_chain_stats(rows, out_dir, stem):
 
 
 def cross_chain_counts(rows, out_dir, stem):
-    header = ["Rede", "Horários", "Aquecimento", "Finalizadas", "Só incluídas", "Falhas", "Perdidas",
-              "Puladas (rede ocupada)", "Chamadas RPC: média", "Chamadas RPC: máximo", "Chamadas RPC: total"]
-    table = [[network_label(r)] + [str(r[k]) for k in ("scheduled", "warmUp", "finalized", "included", "failed",
-                                                        "missed", "skippedBusy")]
+    header = ["Rede", "Horários", "Aquecimento", "Finalizadas", "Só incluídas", "Falhas da rede",
+              "Recusadas pelo provedor", "Perdidas", "Puladas (rede ocupada)", "Chamadas RPC: média",
+              "Chamadas RPC: máximo", "Chamadas RPC: total"]
+    table = [[network_label(r)] + [str(r.get(k, 0)) for k in ("scheduled", "warmUp", "finalized", "included",
+                                                               "failed", "providerRefused", "missed", "skippedBusy")]
              + [plain_number(r["rpcCallsMean"], 1), plain_number(r["rpcCallsMax"]), plain_number(r["rpcCallsTotal"])]
              for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
     write_table(out_dir, "entre-redes-contagens.csv", header, table, stem,
-                "Resultado de cada horário da coleta e uso de RPC por rede")
+                "Resultado de cada horário da coleta e uso de RPC por rede; recusadas pelo provedor = "
+                "limite de requisições do RPC, sem chegar à rede (fora da taxa de falhas da rede)")
 
 
 def anchor_phases(rows):

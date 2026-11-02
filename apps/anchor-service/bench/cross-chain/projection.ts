@@ -32,6 +32,15 @@ const TRUST_MODEL: Record<NetworkKind, string> = {
 };
 
 const anchored = (row: CrossChainRow) => row.status === "finalized" || row.status === "included";
+const tried = (row: CrossChainRow) => row.status !== "missed" && row.status !== "skipped-busy";
+
+/**
+ * A failure caused by the RPC provider's rate limit (JSON-RPC -32005 or HTTP
+ * 429), not by the network: the transaction never reached the chain, so it
+ * is reported apart and kept out of the network's failure rate.
+ */
+const providerRefused = (row: CrossChainRow) =>
+  row.status === "failed" && /too many requests|-32005|\b429\b/i.test(row.errorMessage ?? "");
 const mean = (values: number[]) => values.reduce((sum, v) => sum + v, 0) / values.length;
 
 /**
@@ -117,7 +126,7 @@ export function deployCost(days: HistoryDay[], gas: Gas): Cost {
 export function summaryRow(network: string, kind: NetworkKind, projection: Projection, rows: CrossChainRow[]) {
   // The warm-up is recorded but kept out of every statistic (spec §4).
   const own = rows.filter((row) => row.network === network && !row.warmUp);
-  const attempted = own.filter((row) => row.status !== "missed" && row.status !== "skipped-busy");
+  const attempted = own.filter((row) => tried(row) && !providerRefused(row));
   const seconds = (values: (number | null)[]) =>
     values.filter((v): v is number => v !== null).map((v) => v / 1000);
   const inclusion = seconds(own.filter(anchored).map((row) => row.inclusionMs));
@@ -131,7 +140,7 @@ export function summaryRow(network: string, kind: NetworkKind, projection: Proje
     finalityMedianS: finality.length ? percentile(finality, 0.5) : null,
     finalityP95S: finality.length ? percentile(finality, 0.95) : null,
     failureRate: attempted.length ? attempted.filter((row) => row.status === "failed").length / attempted.length : null,
-    rpcCallsMean: attempted.length ? mean(attempted.map((row) => row.rpcCallsTestnet + row.rpcCallsMainnet)) : null,
+    rpcCallsMean: own.some(tried) ? mean(own.filter(tried).map((row) => row.rpcCallsTestnet + row.rpcCallsMainnet)) : null,
     trustModel: TRUST_MODEL[kind],
   };
 }
@@ -183,7 +192,10 @@ export function statsRows(
   return series.filter(([, values]) => values.length > 0).map(([metric, values]) => ({ network, metric, ...summarize(values) }));
 }
 
-/** Every outcome of the run for one network, and the RPC calls of its attempted anchorings. */
+/**
+ * Every outcome of the run for one network (network failures and provider
+ * refusals apart), and the RPC calls of its attempted anchorings.
+ */
 export function runCounts(network: string, rows: CrossChainRow[]) {
   const own = rows.filter((row) => row.network === network);
   const count = (status: CrossChainRow["status"]) => own.filter((row) => row.status === status).length;
@@ -196,7 +208,8 @@ export function runCounts(network: string, rows: CrossChainRow[]) {
     warmUp: own.filter((row) => row.warmUp).length,
     finalized: count("finalized"),
     included: count("included"),
-    failed: count("failed"),
+    failed: own.filter((row) => row.status === "failed" && !providerRefused(row)).length,
+    providerRefused: own.filter(providerRefused).length,
     missed: count("missed"),
     skippedBusy: count("skipped-busy"),
     rpcCallsMean: calls.length ? mean(calls) : null,

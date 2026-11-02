@@ -8,7 +8,7 @@
     "inclusionMedianS": 15,
     "finalityMedianS": 900,
     "finalityP95S": 1080.0,
-    "failureRate": 0.03125,
+    "failureRate": 0,
     "rpcCallsMean": 40,
     "trustModel": "Consenso da pr\u00f3pria Ethereum (m\u00e1xima descentraliza\u00e7\u00e3o)"
   },
