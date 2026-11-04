@@ -1,5 +1,6 @@
 import { oneTwoFive } from "service-runtime";
 import type { HistoryDay } from "./history.ts";
+import type { Statistic } from "./scanner.ts";
 import { percentile, summarize } from "./stats.ts";
 import type { CrossChainRow, NetworkKind } from "./types.ts";
 
@@ -9,6 +10,8 @@ export interface Cost {
 }
 
 export interface Projection {
+  /** The scenario the tables use: the mean or the median of the daily costs. */
+  center: Cost;
   mean: Cost;
   p10: Cost;
   p90: Cost;
@@ -85,12 +88,18 @@ export function dailyCost(
   return { usd, brl: usd * day.ptax };
 }
 
-/** Mean (base scenario) and p10/p90 (optimistic/pessimistic) of the daily cost series. */
-export function projectNetwork(days: HistoryDay[], gas: Gas): Projection {
+function summarizeCosts(costs: Cost[], statistic: Statistic): Cost {
+  const of = (values: number[]) => (statistic === "median" ? percentile(values, 0.5) : mean(values));
+  return { usd: of(costs.map((c) => c.usd)), brl: of(costs.map((c) => c.brl)) };
+}
+
+/** The center (mean or median, the base scenario) and p10/p90 (optimistic/pessimistic) of the daily cost series. */
+export function projectNetwork(days: HistoryDay[], gas: Gas, statistic: Statistic = "mean"): Projection {
   const costs = days.map((day) => dailyCost(day, gas));
   const usd = costs.map((c) => c.usd);
   const brl = costs.map((c) => c.brl);
   return {
+    center: summarizeCosts(costs, statistic),
     mean: { usd: mean(usd), brl: mean(brl) },
     p10: { usd: percentile(usd, 0.1), brl: percentile(brl, 0.1) },
     p90: { usd: percentile(usd, 0.9), brl: percentile(brl, 0.9) },
@@ -116,10 +125,9 @@ export function perRecordRows(network: string, cost: Cost, sizes = oneTwoFive(10
   }));
 }
 
-/** The deploy's mainnet gas priced with the window's mean daily cost (Arbitrum: the deploy's own L1 part). */
-export function deployCost(days: HistoryDay[], gas: Gas): Cost {
-  const costs = days.map((day) => dailyCost(day, gas, "l1GasUsedDeploy"));
-  return { usd: mean(costs.map((c) => c.usd)), brl: mean(costs.map((c) => c.brl)) };
+/** The deploy's mainnet gas priced with the window's mean or median daily cost (Arbitrum: the deploy's own L1 part). */
+export function deployCost(days: HistoryDay[], gas: Gas, statistic: Statistic = "mean"): Cost {
+  return summarizeCosts(days.map((day) => dailyCost(day, gas, "l1GasUsedDeploy")), statistic);
 }
 
 /** The decision table's row: cost next to time to finality and trust model. */
@@ -133,9 +141,9 @@ export function summaryRow(network: string, kind: NetworkKind, projection: Proje
   const finality = seconds(own.filter((row) => row.status === "finalized").map((row) => row.finalityMs));
   return {
     network,
-    costPerAnchoringBrl: projection.mean.brl,
-    costPerAnchoringUsd: projection.mean.usd,
-    annualBaseBrl: projection.mean.brl * BASE_FREQUENCY * 365,
+    costPerAnchoringBrl: projection.center.brl,
+    costPerAnchoringUsd: projection.center.usd,
+    annualBaseBrl: projection.center.brl * BASE_FREQUENCY * 365,
     inclusionMedianS: inclusion.length ? percentile(inclusion, 0.5) : null,
     finalityMedianS: finality.length ? percentile(finality, 0.5) : null,
     finalityP95S: finality.length ? percentile(finality, 0.95) : null,

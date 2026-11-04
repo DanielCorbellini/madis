@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "testnetGasUsed": 4442948,
+    "mainnetGas": 661743,
+    "costUsd": 0.49999999999999994,
+    "costBrl": 2.7
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "testnetGasUsed": 658734,
+    "mainnetGas": 665129,
+    "costUsd": 0.028935185185185182,
+    "costBrl": 0.15625
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "testnetGasUsed": 655374,
+    "mainnetGas": 661743,
+    "costUsd": 0.034722222222222224,
+    "costBrl": 0.1875
+  }
+]

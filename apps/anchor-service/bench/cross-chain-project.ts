@@ -17,6 +17,7 @@ import {
   statsRows,
   summaryRow,
 } from "./cross-chain/projection.ts";
+import type { Statistic } from "./cross-chain/scanner.ts";
 import { runIdFromDate } from "./cross-chain/schedule.ts";
 import type { CrossChainRow, NetworkKind } from "./cross-chain/types.ts";
 
@@ -40,12 +41,18 @@ async function main(): Promise<void> {
     options: { run: { type: "string" }, history: { type: "string" } },
   });
   if (!values.run || !values.history) {
-    throw new Error("usage: bench:cross-chain-project --run <runId> --history <history timestamp>");
+    throw new Error(
+      "usage: bench:cross-chain-project --run <runId> --history <history timestamp | scanner-mean-<timestamp> | scanner-median-<timestamp>>",
+    );
   }
 
   const rows = await readJson<CrossChainRow[]>(`cross-chain-${values.run}.json`);
   const runMeta = await readJson<RunMetadata>(`cross-chain-${values.run}.meta.json`);
   const history = await readJson<HistoryDay[]>(`cross-chain-history-${values.history}.json`);
+  // A scanner series flags its statistic; a fetched history is summarized by the mean.
+  const scanner = history[0]?.gasPriceSource === "scanner";
+  const statistic = (scanner ? history[0].statistic : "mean") as Statistic;
+  const base = scanner ? `cross-chain-scanner-${statistic}` : "cross-chain";
   const networks = (runMeta.options as { networks: { name: string; kind: NetworkKind }[] }).networks;
   const deploys = runMeta.deploys as Record<string, DeployGas | null>;
 
@@ -66,17 +73,17 @@ async function main(): Promise<void> {
       console.warn(`${name}: skipped (${days.length} history days, ${gas.n} usable anchorings)`);
       continue;
     }
-    const projection = projectNetwork(days, gas);
+    const projection = projectNetwork(days, gas, statistic);
     scenarios[name] = { ...projection, anchoringsUsed: gas.n };
     summary.push({ kind, ...summaryRow(name, kind, projection, rows) });
-    annual.push(...annualRows(name, projection.mean).map((row) => ({ kind, ...row })));
-    perRecord.push(...perRecordRows(name, projection.mean).map((row) => ({ kind, ...row })));
+    annual.push(...annualRows(name, projection.center).map((row) => ({ kind, ...row })));
+    perRecord.push(...perRecordRows(name, projection.center).map((row) => ({ kind, ...row })));
 
     const deploy = deploys[name];
     const deployMainnet = deploy?.mainnetGasEstimate ? Number(deploy.mainnetGasEstimate) : null;
     if (deploy && deployMainnet !== null) {
       const l1 = deploy.mainnetL1GasUsed ? Number(deploy.mainnetL1GasUsed) : 0;
-      const cost = deployCost(days, { total: deployMainnet, l2: deployMainnet - l1 });
+      const cost = deployCost(days, { total: deployMainnet, l2: deployMainnet - l1 }, statistic);
       deployRows.push({
         kind,
         network: name,
@@ -114,20 +121,20 @@ async function main(): Promise<void> {
 
   const timestamp = runIdFromDate(startedAt);
   const meta = {
-    ...collectRunMetadata({ run: values.run, history: values.history }, startedAt),
+    ...collectRunMetadata({ run: values.run, history: values.history, statistic }, startedAt),
     historyWindow: { from: history[0]?.date, to: history.at(-1)?.date },
     scenarios,
     blobSummary: blobSummary(history.filter((day) => day.kind === "ethereum")),
   };
   const outputs: [string, Record<string, unknown>[]][] = [
-    ["cross-chain-summary", summary],
-    ["cross-chain-annual", annual],
-    ["cross-chain-per-record", perRecord],
-    ["cross-chain-deploy", deployRows],
-    ["cross-chain-gas", gasRows],
-    ["cross-chain-cost-24h", cost24h],
-    ["cross-chain-stats", stats],
-    ["cross-chain-counts", counts],
+    [`${base}-summary`, summary],
+    [`${base}-annual`, annual],
+    [`${base}-per-record`, perRecord],
+    [`${base}-deploy`, deployRows],
+    [`${base}-gas`, gasRows],
+    [`${base}-cost-24h`, cost24h],
+    [`${base}-stats`, stats],
+    [`${base}-counts`, counts],
   ];
   for (const [prefix, data] of outputs) {
     if (data.length === 0) {

@@ -24,7 +24,9 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing",
             "monitor-audit-cost", "cross-chain-cost-24h", "cross-chain-annual", "cross-chain-per-record",
             "cross-chain-summary", "cross-chain-deploy", "cross-chain-gas", "cross-chain-stats",
-            "cross-chain-counts"]
+            "cross-chain-counts"] + [
+    f"cross-chain-scanner-{statistic}-{table}" for statistic in ("mean", "median")
+    for table in ("summary", "annual", "per-record", "deploy", "cost-24h")]
 NAME = re.compile(r"^(?P<prefix>.+)-(?P<ts>\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z)\.(json|csv)$")
 
 # Categorical slots (validated: CVD-safe on white; slots 3-4 need labels/markers).
@@ -701,6 +703,152 @@ def cross_chain_counts(rows, out_dir, stem):
                 "limite de requisições do RPC, sem chegar à rede (fora da taxa de falhas da rede)")
 
 
+# ---------- cross-chain charts with the block explorers' gas prices ----------
+
+SCANNER_NOTE = ("Preço do gas: médias diárias do Etherscan, Polygonscan e Arbiscan nos 6 meses anteriores à "
+                "coleta, que refletem o valor médio pago por transação, inclusive por remetentes dispostos a "
+                "pagar por prioridade.")
+
+
+def scanner_ranges(stem) -> str:
+    scenarios = read_meta(stem).get("scenarios", {})
+    ranges = "; ".join(f"{name} {reais(v['p10']['brl'])} a {reais(v['p90']['brl'])}" for name, v in scenarios.items())
+    return f" Faixa por ancoragem (p10 a p90 do custo diário): {ranges}." if ranges else ""
+
+
+def scanner_annual(rows, name, title, ylabel, caption, out_dir, stem):
+    groups = by_kind(rows)
+    frequencies = sorted({r["perDay"] for r in rows})
+    fig, axes_by_kind, axes = network_axes(3.6)
+    for ax in axes:
+        own = [k for k in groups if axes_by_kind[k] is ax]
+        width = 0.8 / max(len(own), 1)
+        for j, kind in enumerate(own):
+            values = [next(r["annualBrl"] for r in groups[kind] if r["perDay"] == f) for f in frequencies]
+            xs = [i + (j - (len(own) - 1) / 2) * width for i in range(len(frequencies))]
+            bars = ax.bar(xs, values, width, color=NETWORKS[kind][1], label=network_label(groups[kind][0]))
+            ax.bar_label(bars, labels=[reais(v) for v in values], fontsize=5.5, color=INK_2, padding=1, rotation=90)
+        ax.set_xticks(range(len(frequencies)), [str(f) for f in frequencies])
+        ax.set_xlabel("Ancoragens por dia")
+        ax.grid(axis="x", visible=False)
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=7)
+    money_axis(axes)
+    for ax in axes:  # room for the rotated labels
+        ax.set_ylim(top=ax.get_ylim()[1] * (1.3 if LINEAR else 8))
+    axes[0].set_ylabel(ylabel + (" (R$)" if LINEAR else " (R$, escala log)"))
+    fig.suptitle(title, fontsize=11, color=INK)
+    save(fig, out_dir, name, caption, stem)
+
+
+def scanner_cost_24h(points, mean_summary, median_summary, out_dir, stem):
+    points = [r for r in points if not r.get("warmUp")]
+    t0 = datetime_ms(min(r["scheduledAt"] for r in points))
+    mean_of = {r["kind"]: r["costPerAnchoringBrl"] for r in mean_summary}
+    median_of = {r["kind"]: r["costPerAnchoringBrl"] for r in median_summary}
+    fig, axes_by_kind, axes = network_axes(3.6)
+    for kind, group in by_kind(points).items():
+        _, color, marker = NETWORKS[kind]
+        ax = axes_by_kind[kind]
+        hours = [(datetime_ms(r["scheduledAt"]) - t0) / 3_600_000 for r in group]
+        ax.plot(hours, [r["costBrl"] for r in group], color=color, marker=marker, markersize=3, linewidth=1.2,
+                label=network_label(group[0]))
+        ax.axhline(mean_of[kind], color=color, linestyle="--", linewidth=1)
+        ax.axhline(median_of[kind], color=color, linestyle=":", linewidth=1)
+    money_axis(axes)
+    for ax in axes:
+        ax.plot([], [], color=INK_2, linestyle="--", linewidth=1, label="Média dos 6 meses")
+        ax.plot([], [], color=INK_2, linestyle=":", linewidth=1, label="Mediana dos 6 meses")
+        ax.set_xlabel("Horas desde o início da coleta")
+        decimal_comma(ax, "x")
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=6.5)
+    axes[0].set_ylabel("Custo por ancoragem (R$" + (")" if LINEAR else ", escala log)"))
+    fig.suptitle("Custo de cada ancoragem nas 24 h, em relação ao período de 6 meses", fontsize=11, color=INK)
+    save(fig, out_dir, "entre-redes-exploradores-custo-24h.png",
+         "Custo de cada ancoragem da coleta se tivesse sido paga na mainnet no mesmo instante: gas estimado na "
+         "mainnet × preço do gas consultado na mainnet no envio (taxa base + gorjeta mediana; os exploradores só "
+         "publicam médias diárias) × cotação e PTAX médias do período. As linhas horizontais são a média e a mediana "
+         f"do custo diário em 6 meses. {SCANNER_NOTE}", stem)
+
+
+def scanner_per_record(mean_rows, median_rows, out_dir, stem):
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
+    for rows, linestyle, suffix in ((mean_rows, "-", ""), (median_rows, "--", ", mediana")):
+        for kind, group in by_kind(rows).items():
+            _, color, marker = NETWORKS[kind]
+            group = sorted(group, key=lambda r: r["batchSize"])
+            ax.plot([r["batchSize"] for r in group], [r["perRecordBrl"] for r in group], color=color,
+                    linestyle=linestyle, marker=marker if linestyle == "-" else None,
+                    linewidth=2 if linestyle == "-" else 1, label=network_label(group[0]) + suffix)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    decimal_comma(ax)
+    ax.set_xlabel("Registros por lote (escala log)")
+    ax.set_ylabel("Custo por registro (R$, escala log)")
+    ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
+    ax.legend(loc="upper right", fontsize=6.5, ncol=2)
+    save(fig, out_dir, "entre-redes-exploradores-custo-por-registro.png",
+         "Custo de uma ancoragem dividido pelo número de registros do lote (linha cheia: média; tracejada: mediana): "
+         f"o custo da transação não depende do tamanho do lote. {SCANNER_NOTE}", stem)
+
+
+def scanner_tables(mean_summary, median_summary, mean_deploy, median_deploy, out_dir, stem):
+    by_net = lambda rows: {r["network"]: r for r in rows}
+    median_s, median_d = by_net(median_summary), by_net(median_deploy)
+    order = lambda r: list(NETWORKS).index(r["kind"])
+    money = lambda v: reais(v).removeprefix("R$ ")
+    usd = lambda v: f"{v:.3g}".replace(".", ",")
+    write_table(out_dir, "entre-redes-exploradores-sintese.csv",
+                ["Rede", "Por ancoragem, média (R$)", "Por ancoragem, mediana (R$)", "Por ancoragem, média (US$)",
+                 "Por ancoragem, mediana (US$)", "Anual 8/dia, média (R$)", "Anual 8/dia, mediana (R$)",
+                 "Inclusão, mediana (s)", "Finalidade, mediana (s)", "Finalidade, p95 (s)", "Falhas da rede (%)",
+                 "Modelo de confiança"],
+                [[network_label(r), money(r["costPerAnchoringBrl"]), money(median_s[r["network"]]["costPerAnchoringBrl"]),
+                  usd(r["costPerAnchoringUsd"]), usd(median_s[r["network"]]["costPerAnchoringUsd"]),
+                  money(r["annualBaseBrl"]), money(median_s[r["network"]]["annualBaseBrl"]),
+                  plain_number(r["inclusionMedianS"], 1), plain_number(r["finalityMedianS"], 1),
+                  plain_number(r["finalityP95S"], 1),
+                  plain_number(None if r["failureRate"] is None else 100 * r["failureRate"], 1), r["trustModel"]]
+                 for r in sorted(mean_summary, key=order)],
+                stem, "Tabela de síntese com o preço dos exploradores: média e mediana do custo diário")
+    write_table(out_dir, "entre-redes-exploradores-deploy.csv",
+                ["Rede", "Gas na testnet", "Gas na mainnet (estimado)", "Custo, média (R$)", "Custo, mediana (R$)",
+                 "Custo, média (US$)", "Custo, mediana (US$)"],
+                [[network_label(r), plain_number(r["testnetGasUsed"]), plain_number(r["mainnetGas"]),
+                  money(r["costBrl"]), money(median_d[r["network"]]["costBrl"]),
+                  usd(r["costUsd"]), usd(median_d[r["network"]]["costUsd"])]
+                 for r in sorted(mean_deploy, key=order)],
+                stem, "Custo único de implantação com o preço dos exploradores")
+
+
+def scanner_charts(loaded, out_dir) -> None:
+    table = lambda statistic, name: loaded.get(f"cross-chain-scanner-{statistic}-{name}")
+    needed = ["summary", "annual", "per-record", "deploy", "cost-24h"]
+    missing = [f"{s}-{n}" for s in ("mean", "median") for n in needed if not table(s, n)]
+    if len(missing) == 2 * len(needed):
+        return
+    if missing:
+        return note("cross-chain-scanner", f"faltam as tabelas {', '.join(missing)}")
+    mean_of = lambda name: table("mean", name)[0]
+    median_of = lambda name: table("median", name)[0]
+    stem = table("mean", "annual")[1]
+    scanner_annual(mean_of("annual"), "entre-redes-exploradores-projecao-anual-media.png",
+                   "Projeção de custo anual por frequência de ancoragem (média)", "Custo anual",
+                   "Custo anual de operação (sem o deploy) por número de ancoragens por dia, pela média do custo "
+                   f"diário nos 6 meses: é o orçamento esperado, pois inclui os dias caros. {SCANNER_NOTE}"
+                   f"{scanner_ranges(stem)}", out_dir, stem)
+    scanner_annual(median_of("annual"), "entre-redes-exploradores-projecao-anual-mediana.png",
+                   "Ritmo de um dia típico, anualizado (mediana)", "Custo anualizado",
+                   "Custo de um dia típico, anualizado, por número de ancoragens por dia: a mediana do custo diário "
+                   "nos 6 meses × 365. Mostra quanto o ano custaria se todos os dias fossem típicos; não é uma "
+                   f"previsão de gasto, pois não inclui o peso dos dias caros. {SCANNER_NOTE}", out_dir,
+                   table("median", "annual")[1])
+    scanner_cost_24h(mean_of("cost-24h"), mean_of("summary"), median_of("summary"), out_dir, table("mean", "cost-24h")[1])
+    scanner_per_record(mean_of("per-record"), median_of("per-record"), out_dir, table("mean", "per-record")[1])
+    scanner_tables(mean_of("summary"), median_of("summary"), mean_of("deploy"), median_of("deploy"), out_dir,
+                   table("mean", "summary")[1])
+
+
 def anchor_phases(rows):
     """Tree and proofs apart when the run measured them apart; together for older runs."""
     common = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
@@ -912,6 +1060,7 @@ def main() -> None:
 
     if "perf" in loaded and "monitor-audit-cost" in loaded:
         anchor_vs_audit(*loaded["perf"], *loaded["monitor-audit-cost"], out_dir)
+    scanner_charts(loaded, out_dir)
 
 
 if __name__ == "__main__":

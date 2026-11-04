@@ -13,6 +13,7 @@
     "bench:cross-chain": "tsx bench/cross-chain.ts",
     "bench:cross-chain-history": "tsx bench/cross-chain-history.ts",
     "bench:cross-chain-project": "tsx bench/cross-chain-project.ts",
+    "bench:cross-chain-scanner": "tsx bench/cross-chain-scanner.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1"
   },

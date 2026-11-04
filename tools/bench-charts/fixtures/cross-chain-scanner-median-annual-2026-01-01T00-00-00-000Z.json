@@ -1,0 +1,86 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "perDay": 1,
+    "annualUsd": 30.416666666666664,
+    "annualBrl": 164.25
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "perDay": 8,
+    "annualUsd": 243.33333333333331,
+    "annualBrl": 1314.0
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "perDay": 24,
+    "annualUsd": 730.0,
+    "annualBrl": 3941.999999999999
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "perDay": 96,
+    "annualUsd": 2920.0,
+    "annualBrl": 15767.999999999996
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "perDay": 1,
+    "annualUsd": 2.0277777777777777,
+    "annualBrl": 10.95
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "perDay": 8,
+    "annualUsd": 16.22222222222222,
+    "annualBrl": 87.6
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "perDay": 24,
+    "annualUsd": 48.66666666666666,
+    "annualBrl": 262.8
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "perDay": 96,
+    "annualUsd": 194.66666666666663,
+    "annualBrl": 1051.2
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "perDay": 1,
+    "annualUsd": 2.0277777777777777,
+    "annualBrl": 10.95
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "perDay": 8,
+    "annualUsd": 16.22222222222222,
+    "annualBrl": 87.6
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "perDay": 24,
+    "annualUsd": 48.66666666666666,
+    "annualBrl": 262.8
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "perDay": 96,
+    "annualUsd": 194.66666666666663,
+    "annualBrl": 1051.2
+  }
+]
