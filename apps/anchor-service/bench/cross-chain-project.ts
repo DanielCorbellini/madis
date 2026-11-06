@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { collectRunMetadata, writeResults, type RunMetadata } from "service-runtime";
-import type { DeployGas } from "./cross-chain/deploy.ts";
+import { adjustedDeployGas, parseGasLimits, type DeployGas } from "./cross-chain/deploy.ts";
 import type { HistoryDay } from "./cross-chain/history.ts";
 import {
   annualRows,
@@ -38,11 +38,11 @@ async function main(): Promise<void> {
   const startedAt = new Date();
   const { values } = parseArgs({
     args: process.argv.slice(2),
-    options: { run: { type: "string" }, history: { type: "string" } },
+    options: { run: { type: "string" }, history: { type: "string" }, "deploy-gas-limits": { type: "string" } },
   });
   if (!values.run || !values.history) {
     throw new Error(
-      "usage: bench:cross-chain-project --run <runId> --history <history timestamp | scanner-mean-<timestamp> | scanner-median-<timestamp>>",
+      "usage: bench:cross-chain-project --run <runId> --history <history timestamp | scanner-mean-<timestamp> | scanner-median-<timestamp>> [--deploy-gas-limits name=gas,...]",
     );
   }
 
@@ -55,6 +55,8 @@ async function main(): Promise<void> {
   const base = scanner ? `cross-chain-scanner-${statistic}` : "cross-chain";
   const networks = (runMeta.options as { networks: { name: string; kind: NetworkKind }[] }).networks;
   const deploys = runMeta.deploys as Record<string, DeployGas | null>;
+
+  const gasLimits = parseGasLimits(values["deploy-gas-limits"]);
 
   const summary = [];
   const annual = [];
@@ -80,15 +82,18 @@ async function main(): Promise<void> {
     perRecord.push(...perRecordRows(name, projection.center).map((row) => ({ kind, ...row })));
 
     const deploy = deploys[name];
-    const deployMainnet = deploy?.mainnetGasEstimate ? Number(deploy.mainnetGasEstimate) : null;
+    const deployEstimate = deploy?.testnetGasEstimate ? Number(deploy.testnetGasEstimate) : (gasLimits[name] ?? null);
+    const deployMainnet = deploy?.mainnetGasEstimate ? adjustedDeployGas(deploy, deployEstimate) : null;
     if (deploy && deployMainnet !== null) {
-      const l1 = deploy.mainnetL1GasUsed ? Number(deploy.mainnetL1GasUsed) : 0;
-      const cost = deployCost(days, { total: deployMainnet, l2: deployMainnet - l1 }, statistic);
+      if (deployEstimate === null) console.warn(`${name}: no testnet estimate for the deploy; its gas was not adjusted`);
+      const cost = deployCost(days, deployMainnet, statistic);
       deployRows.push({
         kind,
         network: name,
         testnetGasUsed: Number(deploy.gasUsed),
-        mainnetGas: deployMainnet,
+        testnetGasEstimate: deployEstimate,
+        mainnetGasEstimate: Number(deploy.mainnetGasEstimate),
+        mainnetGas: deployMainnet.total,
         costUsd: cost.usd,
         costBrl: cost.brl,
       });
@@ -104,8 +109,8 @@ async function main(): Promise<void> {
       anchoringMainnetGas: gas.total,
       anchoringTestnetOverMainnet: gas.testnet / gas.total,
       deployTestnetGas: deploy ? Number(deploy.gasUsed) : null,
-      deployMainnetGas: deployMainnet,
-      deployTestnetOverMainnet: deploy && deployMainnet ? Number(deploy.gasUsed) / deployMainnet : null,
+      deployMainnetGas: deployMainnet?.total ?? null,
+      deployTestnetOverMainnet: deploy && deployMainnet ? Number(deploy.gasUsed) / deployMainnet.total : null,
     });
 
     const meanPrices = { tokenUsd: mean(days.map((d) => d.tokenUsd)), ptax: mean(days.map((d) => d.ptax)) };
@@ -121,7 +126,7 @@ async function main(): Promise<void> {
 
   const timestamp = runIdFromDate(startedAt);
   const meta = {
-    ...collectRunMetadata({ run: values.run, history: values.history, statistic }, startedAt),
+    ...collectRunMetadata({ run: values.run, history: values.history, statistic, deployGasLimits: gasLimits }, startedAt),
     historyWindow: { from: history[0]?.date, to: history.at(-1)?.date },
     scenarios,
     blobSummary: blobSummary(history.filter((day) => day.kind === "ethereum")),

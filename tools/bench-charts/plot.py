@@ -658,7 +658,7 @@ def cross_chain_summary(rows, out_dir, stem):
 
 
 def cross_chain_deploy(rows, out_dir, stem):
-    header = ["Rede", "Gas na testnet", "Gas na mainnet (estimado)", "Custo (R$)", "Custo (US$)"]
+    header = ["Rede", "Gas na testnet", "Gas na mainnet (estimado e ajustado)", "Custo (R$)", "Custo (US$)"]
     table = [[network_label(r), plain_number(r["testnetGasUsed"]), plain_number(r["mainnetGas"]),
               reais(r["costBrl"]).removeprefix("R$ "), f"{r['costUsd']:.3g}".replace(".", ",")]
              for r in sorted(rows, key=lambda r: list(NETWORKS).index(r["kind"]))]
@@ -812,7 +812,7 @@ def scanner_tables(mean_summary, median_summary, mean_deploy, median_deploy, out
                  for r in sorted(mean_summary, key=order)],
                 stem, "Tabela de síntese com o preço dos exploradores: média e mediana do custo diário")
     write_table(out_dir, "entre-redes-exploradores-deploy.csv",
-                ["Rede", "Gas na testnet", "Gas na mainnet (estimado)", "Custo, média (R$)", "Custo, mediana (R$)",
+                ["Rede", "Gas na testnet", "Gas na mainnet (estimado e ajustado)", "Custo, média (R$)", "Custo, mediana (R$)",
                  "Custo, média (US$)", "Custo, mediana (US$)"],
                 [[network_label(r), plain_number(r["testnetGasUsed"]), plain_number(r["mainnetGas"]),
                   money(r["costBrl"]), money(median_d[r["network"]]["costBrl"]),

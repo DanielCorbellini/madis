@@ -77,7 +77,9 @@ async function prepareNetwork(net: CrossChainNetwork): Promise<DeployGas | null>
       const l1 = net.kind === "arbitrum"
         ? (await mainnetSnapshot(net.kind, mainnet, artifact.bytecode, true)).l1GasUsed
         : null;
-      return deployGas(txHash, receipt, raw, estimate, l1);
+      const transaction = await chain.provider.getTransaction(txHash);
+      if (!transaction) throw new Error(`deploy transaction ${txHash} not found on chain`);
+      return deployGas(txHash, { gasUsed: receipt.gasUsed, gasLimit: transaction.gasLimit }, raw, estimate, l1);
     } catch (error) {
       console.warn(`${net.name}: deploy cost unavailable (${maskSecrets(String(error), [net.privateKey])})`);
       return null;
