@@ -41,6 +41,7 @@ export interface AuditDeps {
       batchId: number,
       recordId: number,
       expectedRoot: string,
+      actualRoot: string | null,
       details: string,
     ): Promise<boolean>;
   };
@@ -87,20 +88,24 @@ export async function auditBatch(
     );
   }
 
-  if (anchorCountCheck.complete && size <= rebuildLimit) {
-    const fastPath = await tryFastPath(deps, batchId, root, logger);
+  let rebuiltRoot: string | null = null;
 
-    if (fastPath) {
+  if (anchorCountCheck.complete && size <= rebuildLimit) {
+    const rebuild = await tryRebuildRoot(deps, batchId, logger);
+
+    if (rebuild?.root === root) {
       return {
         batchId,
         onChainRoot: root,
         onChainSize: size,
         anchoredCount,
         complete: true,
-        recordsChecked: fastPath.recordsChecked,
+        recordsChecked: rebuild.recordsChecked,
         tamperedRecordIds: [],
       };
     }
+
+    rebuiltRoot = rebuild?.root ?? null;
   }
 
   let recordsChecked = 0;
@@ -116,7 +121,7 @@ export async function auditBatch(
       tamperedRecordIds.push(record.id);
       const message = `record ${record.id} in batch ${batchId}: recomputed leaf does not verify against its stored proof and the on-chain root — data was likely tampered with`;
       logger.error({ batchId, recordId: record.id }, message);
-      await deps.alerts.recordTampered(batchId, record.id, root, message);
+      await deps.alerts.recordTampered(batchId, record.id, root, rebuiltRoot, message);
     }
   }
 
@@ -132,22 +137,19 @@ export async function auditBatch(
 }
 
 /**
- * Tries to confirm a batch is clean by rebuilding its root from every
- * currently-pinned record's current content and comparing it to the
- * on-chain root — needs no stored proof at all, unlike the per-record
- * fallback, so it's the cheap path for the common case where nothing is
- * wrong. Returns `null` (never throws) on any mismatch, or if anything
- * about the rebuild itself fails (e.g. a malformed record's leaf
- * computation throwing) — either way, the caller falls back to the
- * per-record loop, which is the only thing that can actually name a
- * tampered record.
+ * Rebuilds a batch's root from every currently-pinned record's current
+ * content — needs no stored proof at all, unlike the per-record fallback,
+ * so comparing it to the on-chain root is the cheap path for the common
+ * case where nothing is wrong. Returns `null` (never throws) if the rebuild
+ * itself fails (e.g. a malformed record's leaf computation throwing); on a
+ * mismatch or a failure the caller falls back to the per-record loop, which
+ * is the only thing that can actually name a tampered record.
  */
-async function tryFastPath(
+async function tryRebuildRoot(
   deps: Pick<AuditDeps, "records">,
   batchId: number,
-  onChainRoot: string,
   logger: Logger,
-): Promise<{ recordsChecked: number } | null> {
+): Promise<{ root: string; recordsChecked: number } | null> {
   const leaves: string[] = [];
 
   try {
@@ -159,11 +161,7 @@ async function tryFastPath(
 
     logger.debug({ batchId }, "rebuilding merkle root");
 
-    if (computeMerkleRoot(leaves) !== onChainRoot) {
-      return null;
-    }
-
-    return { recordsChecked: leaves.length };
+    return { root: computeMerkleRoot(leaves), recordsChecked: leaves.length };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn(
@@ -193,8 +191,8 @@ export function createAuditDeps(
     alerts: {
       recordRootDivergence: (batchId, expectedRoot, details) =>
         dbRecordRootDivergence(pool, batchId, expectedRoot, details),
-      recordTampered: (batchId, recordId, expectedRoot, details) =>
-        dbRecordTampered(pool, batchId, recordId, expectedRoot, details),
+      recordTampered: (batchId, recordId, expectedRoot, actualRoot, details) =>
+        dbRecordTampered(pool, batchId, recordId, expectedRoot, actualRoot, details),
     },
   };
 }

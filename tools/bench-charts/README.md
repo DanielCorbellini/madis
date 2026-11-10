@@ -29,12 +29,12 @@ tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py <results-dir> [--
 | `monitor-deteccao-vs-k.png`, `monitor-estrategias.png` | `monitor-detection` |
 | `monitor-dimensionamento.png` | `monitor-sizing` |
 | `anchor-perf-fases.png`, `anchor-perf-cpu-memoria.png` | `perf` |
-| `entre-redes-tempos.png` | `cross-chain` (the collection run) |
+| `entre-redes-tempos.png` (median + p95 marker), `entre-redes-tempos-mediana.png` (median only) | `cross-chain` (the collection run) |
 | `entre-redes-custo-24h.png` | `cross-chain-cost-24h` |
 | `entre-redes-projecao-anual.png` | `cross-chain-annual` (p10–p90 range in the caption, from its `.meta.json`) |
 | `entre-redes-custo-por-registro.png` | `cross-chain-per-record` |
 | `entre-redes-sintese.csv`, `entre-redes-deploy.csv`, `entre-redes-gas.csv` | `cross-chain-summary`, `cross-chain-deploy`, `cross-chain-gas` |
-| `entre-redes-exploradores-projecao-anual-media.png` (annual budget), `-projecao-anual-mediana.png` (a typical day, annualized), `-custo-24h.png` (with the period's mean and median as reference lines), `-custo-por-registro.png`, `-sintese.csv`, `-deploy.csv` | `cross-chain-scanner-{mean,median}-{annual,cost-24h,per-record,summary,deploy}`, all ten needed |
+| `entre-redes-exploradores-projecao-anual-media.png` (annual budget), `-projecao-anual-mediana.png` (a typical day, annualized), `-projecao-anual-media-horizontal.png` and `-mediana-horizontal.png` (the same data with horizontal bars and larger labels; log mode only), `-custo-24h.png` (with the period's mean and median as reference lines), `-custo-por-registro.png`, `-sintese.csv`, `-deploy.csv` | `cross-chain-scanner-{mean,median}-{annual,cost-24h,per-record,summary,deploy}`, all ten needed |
 | `comparacao-ancoragem-auditoria.png` | `perf` + `monitor-audit-cost` together |
 
 ### Cross-chain comparison

@@ -53,13 +53,15 @@ export async function recordRootDivergence(
 
 /**
  * Records that a specific record's recomputed leaf no longer matches its
- * anchored proof.
+ * anchored proof. `actualRoot` is the root rebuilt from the batch's current
+ * records, or null when the batch was verified without a rebuild.
  */
 export async function recordTampered(
   db: Queryable,
   batchId: number,
   recordId: number,
   expectedRoot: string,
+  actualRoot: string | null,
   details: string,
 ): Promise<boolean> {
   const existing = await db.query(
@@ -85,11 +87,11 @@ export async function recordTampered(
   await db.query(
     `
       INSERT INTO
-          integrity_alerts (alert_type, source, batch_id, record_id, expected_root, details)
+          integrity_alerts (alert_type, source, batch_id, record_id, expected_root, actual_root, details)
       VALUES
-          ('record_tampered', 'monitor', $1, $2, $3, $4)
+          ('record_tampered', 'monitor', $1, $2, $3, $4, $5)
     `,
-    [batchId, recordId, expectedRoot, details],
+    [batchId, recordId, expectedRoot, actualRoot, details],
   );
 
   return true;

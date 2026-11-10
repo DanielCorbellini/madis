@@ -219,7 +219,7 @@ def monitor_perf(rows, out_dir, stem):
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
     config_lines(ax, rows, lambda r: r["durationMs"] / 1000)
     ax.set_ylabel("Tempo por ciclo (s, média ± desvio padrão)")
-    ax.set_title("Custo por ciclo do monitor: varredura completa vs amostragem")
+    # ax.set_title("Custo por ciclo do monitor: varredura completa vs amostragem")
     save(fig, out_dir, "monitor-custo-tempo.png",
          f"Tempo por ciclo do monitor em função do número de lotes ({batch} registros por lote). "
          f"Média de {cycles_text} ciclos medidos por ponto (após um ciclo de aquecimento "
@@ -228,14 +228,14 @@ def monitor_perf(rows, out_dir, stem):
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: (r["cpuUserMs"] + r["cpuSystemMs"]) / 1000)
     ax.set_ylabel("Tempo de CPU por ciclo (s, média ± desvio padrão)")
-    ax.set_title("CPU por ciclo do monitor")
+    # ax.set_title("CPU por ciclo do monitor")
     save(fig, out_dir, "monitor-custo-cpu.png",
          f"Tempo de CPU (usuário + sistema) por ciclo do monitor. {CPU_CAVEAT}", stem)
 
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: r["peakRssBytes"] / 2**20, legend_loc="lower right")
     ax.set_ylabel("Pico de memória (MiB, média ± desvio padrão)")
-    ax.set_title("Memória por ciclo do monitor")
+    # ax.set_title("Memória por ciclo do monitor")
     save(fig, out_dir, "monitor-custo-memoria.png",
          "Pico de memória residente (RSS) do processo por ciclo; cada configuração "
          "roda em um processo próprio. A memória é praticamente a mesma nas três "
@@ -259,7 +259,7 @@ def monitor_detection(rows, out_dir, stem):
         ax.set_yscale("log")
         ax.set_xlabel("Lotes auditados da passagem por ciclo (k, escala log)")
         ax.set_ylabel("Ciclos até a detecção (escala log)")
-        ax.set_title(f"Latência de detecção vs k (M = {largest}, j = 1)")
+        # ax.set_title(f"Latência de detecção vs k (M = {largest}, j = 1)")
         ax.legend()
         save(fig, out_dir, "monitor-deteccao-vs-k.png",
              f"Ciclos até detectar uma adulteração persistente, por k, com {largest} lotes e "
@@ -287,7 +287,7 @@ def monitor_detection(rows, out_dir, stem):
     decimal_comma(ax)
     ax.set_xticks(range(len(groups)), labels)
     ax.set_ylabel("Ciclos até a detecção")
-    ax.set_title(f"Passagem embaralhada vs sorteio independente (M = {largest}, k = {k})")
+    # ax.set_title(f"Passagem embaralhada vs sorteio independente (M = {largest}, k = {k})")
     ax.grid(axis="x", visible=False)
     ax.legend()
     save(fig, out_dir, "monitor-estrategias.png",
@@ -316,7 +316,7 @@ def detection_vs_m(rows, out_dir, stem):
     ax.set_yscale("log")
     ax.set_xlabel("Lotes ancorados (M, escala log)")
     ax.set_ylabel("Ciclos até a detecção (escala log)")
-    ax.set_title("Latência de detecção vs lotes: k fixo vs k da garantia de 1 hora")
+    # ax.set_title("Latência de detecção vs lotes: k fixo vs k da garantia de 1 hora")
     ax.legend(loc="upper left", fontsize=7)
     save(fig, out_dir, "monitor-deteccao-vs-m.png",
          "Ciclos até detectar uma adulteração persistente, por número de lotes, com 1 verificação "
@@ -344,7 +344,7 @@ def monitor_sizing(rows, out_dir, stem):
         if row == 0:
             cell.set_text_props(color=INK, weight="bold")
             cell.set_facecolor("#f3f2ee")
-    ax.set_title("Dimensionamento de k para um pior caso de detecção", pad=4)
+    # ax.set_title("Dimensionamento de k para um pior caso de detecção", pad=4)
     save(fig, out_dir, "monitor-dimensionamento.png",
          "k mínimo para garantir a detecção de adulteração persistente dentro da janela, "
          "com 1 verificação pontual por ciclo (lotes/ciclo = k + 1).", stem)
@@ -403,7 +403,7 @@ def anchor_perf(rows, out_dir, stem):
     decimal_comma(ax)
     ax.set_xlabel("Registros no lote")
     ax.set_ylabel("Tempo por registro (ms)")
-    ax.set_title("Tempo por registro em cada fase da ancoragem")
+    # ax.set_title("Tempo por registro em cada fase da ancoragem")
     ax.grid(axis="x", visible=False)
     ax.legend(loc="upper left", ncol=2, fontsize=7)
     save(fig, out_dir, "anchor-perf-fases.png",
@@ -420,13 +420,13 @@ def anchor_perf(rows, out_dir, stem):
     mem_ax = axes[0][-1]
     mem_ax.plot(ns, [r["rssPeakBytes"] / 2**20 for r in rows], color=BLUE, marker="o")
     mem_ax.set_ylabel("Pico de memória (MiB)")
-    mem_ax.set_title("Memória")
+    # mem_ax.set_title("Memória")
     if has_cpu:
         cpu_ax = axes[0][0]
         cpu_ax.plot(ns, [(r["cpuUserMs"] + r["cpuSystemMs"]) / 1000 for r in rows],
                     color=BLUE, marker="o")
         cpu_ax.set_ylabel("Tempo de CPU (s)")
-        cpu_ax.set_title("CPU")
+        # cpu_ax.set_title("CPU")
     for ax in axes[0]:
         decimal_comma(ax)
         ax.set_xscale("log")
@@ -443,7 +443,7 @@ def anchor_perf(rows, out_dir, stem):
 
 NETWORKS = {  # kind -> (label, color, marker), in legend order
     "ethereum": ("Ethereum", BLUE, "o"),
-    "arbitrum": ("Arbitrum", AQUA, "^"),
+    "arbitrum": ("Arbitrum One", AQUA, "^"),
     "polygon": ("Polygon PoS", ORANGE, "s"),
 }
 MAINNET_NOTE = ("Custo projetado com o gas estimado na mainnet de cada rede e o preço médio "
@@ -503,6 +503,12 @@ def cross_chain_times(rows, out_dir, stem):
     if not anchored:
         return note("cross-chain", "nenhuma ancoragem incluída no arquivo (use --file para outra execução)")
     groups = by_kind(anchored)
+    times_chart(groups, True, out_dir, "entre-redes-tempos.png", stem)
+    times_chart(groups, False, out_dir, "entre-redes-tempos-mediana.png", stem)
+
+
+def times_chart(groups, with_p95, out_dir, name, stem):
+    """Median inclusion and finality per network; with_p95 adds the 95th-percentile marker."""
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     width = 0.36
     for i, (kind, group) in enumerate(groups.items()):
@@ -513,26 +519,28 @@ def cross_chain_times(rows, out_dir, stem):
                 continue
             mid, p95 = percentile(values, 0.5), percentile(values, 0.95)
             ax.bar(i + offset, mid, width, color=color, label=label if i == 0 else None)
-            ax.plot([i + offset - width / 3, i + offset + width / 3], [p95, p95], color=INK, linewidth=1.2,
-                    label="p95" if i == 0 and key == "finalityMs" else None)
-            # The median's label sits above the p95 marker, so the two never collide.
-            ax.text(i + offset, max(mid, p95) * 1.15, seconds_text(mid), ha="center", va="bottom",
-                    fontsize=7, color=INK_2)
+            if with_p95:
+                ax.plot([i + offset - width / 3, i + offset + width / 3], [p95, p95], color=INK, linewidth=1.2,
+                        label="p95" if i == 0 and key == "finalityMs" else None)
+            # With the p95 marker, the median's label sits above it, so the two never collide.
+            top = max(mid, p95) if with_p95 else mid
+            ax.text(i + offset, top * 1.15, seconds_text(mid), ha="center", va="bottom", fontsize=7, color=INK_2)
     ax.set_xticks(range(len(groups)), [network_label(g[0]) for g in groups.values()])
     ax.set_yscale("log")
     decimal_comma(ax)
     ax.set_ylim(top=ax.get_ylim()[1] * 2.5)
     ax.set_ylabel("Tempo desde o envio (s, escala log)")
-    fig.suptitle("Tempo até a inclusão e até a finalidade por rede", fontsize=11, color=INK)
+    # fig.suptitle("Tempo até a inclusão e até a finalidade por rede", fontsize=11, color=INK)
     ax.grid(axis="x", visible=False)
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3)
     n = max(len(g) for g in groups.values())
     hours = read_meta(stem).get("options", {}).get("durationH")
     window = f" numa coleta de {br(hours)} h" if hours else ""
-    save(fig, out_dir, "entre-redes-tempos.png",
+    marker = "; o traço indica o percentil 95" if with_p95 else ""
+    save(fig, out_dir, name,
          f"Mediana do tempo entre o envio da transação e sua inclusão em um bloco (1 confirmação) e "
          f"até o bloco ser finalizado, em até {n} ancoragens por rede{window} nas redes "
-         "de teste; o traço indica o percentil 95. Tempos medidos por consulta periódica ao nó "
+         f"de teste{marker}. Tempos medidos por consulta periódica ao nó "
          "(inclusão a cada 1 s na Ethereum e 250 ms nas demais; finalidade a cada 30 s e 500 ms na "
          "Polygon), o que acrescenta em média meio intervalo ao valor real.", stem)
 
@@ -555,7 +563,7 @@ def cross_chain_cost_24h(rows, out_dir, stem):
         decimal_comma(ax, "x")
         ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=7)
     axes[0].set_ylabel("Custo por ancoragem (R$" + (")" if LINEAR else ", escala log)"))
-    fig.suptitle("Custo projetado de cada ancoragem ao longo das 24 h", fontsize=11, color=INK)
+    # fig.suptitle("Custo projetado de cada ancoragem ao longo das 24 h", fontsize=11, color=INK)
     save(fig, out_dir, "entre-redes-custo-24h.png",
          "Custo de cada ancoragem da coleta se tivesse sido paga na mainnet no mesmo instante: gas "
          "estimado na mainnet × preço do gas consultado na mainnet no momento do envio × cotação "
@@ -593,7 +601,7 @@ def cross_chain_annual(rows, out_dir, stem):
     for ax in axes:  # room for the rotated labels
         ax.set_ylim(top=ax.get_ylim()[1] * (1.3 if LINEAR else 8))
     axes[0].set_ylabel("Custo anual (R$" + (")" if LINEAR else ", escala log)"))
-    fig.suptitle("Custo anual projetado por frequência de ancoragem", fontsize=11, color=INK)
+    # fig.suptitle("Custo anual projetado por frequência de ancoragem", fontsize=11, color=INK)
     scenarios = read_meta(stem).get("scenarios", {})
     ranges = "; ".join(
         f"{NETWORKS[kind][0]} {reais(scenarios[r['network']]['p10']['brl'])} a "
@@ -621,7 +629,7 @@ def cross_chain_per_record(rows, out_dir, stem):
     decimal_comma(ax)
     ax.set_xlabel("Registros por lote (escala log)")
     ax.set_ylabel("Custo por registro (R$, escala log)")
-    ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
+    # ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
     ax.legend(loc="upper right")
     save(fig, out_dir, "entre-redes-custo-por-registro.png",
          f"Custo de uma ancoragem dividido pelo número de registros do lote: o custo da transação "
@@ -736,7 +744,32 @@ def scanner_annual(rows, name, title, ylabel, caption, out_dir, stem):
     for ax in axes:  # room for the rotated labels
         ax.set_ylim(top=ax.get_ylim()[1] * (1.3 if LINEAR else 8))
     axes[0].set_ylabel(ylabel + (" (R$)" if LINEAR else " (R$, escala log)"))
-    fig.suptitle(title, fontsize=11, color=INK)
+    # fig.suptitle(title, fontsize=11, color=INK)
+    save(fig, out_dir, name, caption, stem)
+
+
+def scanner_annual_horizontal(rows, name, xlabel, caption, out_dir, stem):
+    """The annual chart with horizontal bars, so the values fit at full page width. Log axis only."""
+    groups = by_kind(rows)
+    frequencies = sorted({r["perDay"] for r in rows})
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 4.6))
+    height = 0.26
+    for j, (kind, group) in enumerate(groups.items()):
+        values = [next(r["annualBrl"] for r in group if r["perDay"] == f) for f in frequencies]
+        ys = [i + (j - (len(groups) - 1) / 2) * height for i in range(len(frequencies))]
+        ax.barh(ys, values, height * 0.95, color=NETWORKS[kind][1], label=NETWORKS[kind][0])
+        for y, value in zip(ys, values):
+            ax.text(value * 1.12, y, reais(value), va="center", fontsize=8.5, color=INK)
+    ax.set_xscale("log")
+    low = min(r["annualBrl"] for r in rows)
+    ax.set_xlim(low / 2, max(r["annualBrl"] for r in rows) * 14)
+    ax.invert_yaxis()
+    ax.set_yticks(range(len(frequencies)), [str(f) for f in frequencies], fontsize=9)
+    ax.set_ylabel("Ancoragens por dia", labelpad=10)
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    ax.set_xlabel(f"{xlabel} (R$)", labelpad=10)
+    ax.grid(axis="y", visible=False)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.45, 1.0), ncol=3, fontsize=9)
     save(fig, out_dir, name, caption, stem)
 
 
@@ -762,7 +795,7 @@ def scanner_cost_24h(points, mean_summary, median_summary, out_dir, stem):
         decimal_comma(ax, "x")
         ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=6.5)
     axes[0].set_ylabel("Custo por ancoragem (R$" + (")" if LINEAR else ", escala log)"))
-    fig.suptitle("Custo de cada ancoragem nas 24 h, em relação ao período de 6 meses", fontsize=11, color=INK)
+    # fig.suptitle("Custo de cada ancoragem nas 24 h, em relação ao período de 6 meses", fontsize=11, color=INK)
     save(fig, out_dir, "entre-redes-exploradores-custo-24h.png",
          "Custo de cada ancoragem da coleta se tivesse sido paga na mainnet no mesmo instante: gas estimado na "
          "mainnet × preço do gas consultado na mainnet no envio (taxa base + gorjeta mediana; os exploradores só "
@@ -785,7 +818,7 @@ def scanner_per_record(mean_rows, median_rows, out_dir, stem):
     decimal_comma(ax)
     ax.set_xlabel("Registros por lote (escala log)")
     ax.set_ylabel("Custo por registro (R$, escala log)")
-    ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
+    # ax.set_title("Amortização do custo de ancoragem pelo tamanho do lote")
     ax.legend(loc="upper right", fontsize=6.5, ncol=2)
     save(fig, out_dir, "entre-redes-exploradores-custo-por-registro.png",
          "Custo de uma ancoragem dividido pelo número de registros do lote (linha cheia: média; tracejada: mediana): "
@@ -832,17 +865,24 @@ def scanner_charts(loaded, out_dir) -> None:
     mean_of = lambda name: table("mean", name)[0]
     median_of = lambda name: table("median", name)[0]
     stem = table("mean", "annual")[1]
+    mean_caption = ("Custo anual de operação (sem o deploy) por número de ancoragens por dia, pela média do custo "
+                    f"diário nos 6 meses: é o orçamento esperado, pois inclui os dias caros. {SCANNER_NOTE}"
+                    f"{scanner_ranges(stem)}")
+    median_caption = ("Custo de um dia típico, anualizado, por número de ancoragens por dia: a mediana do custo diário "
+                      "nos 6 meses × 365. Mostra quanto o ano custaria se todos os dias fossem típicos; não é uma "
+                      f"previsão de gasto, pois não inclui o peso dos dias caros. {SCANNER_NOTE}")
+    median_stem = table("median", "annual")[1]
     scanner_annual(mean_of("annual"), "entre-redes-exploradores-projecao-anual-media.png",
                    "Projeção de custo anual por frequência de ancoragem (média)", "Custo anual",
-                   "Custo anual de operação (sem o deploy) por número de ancoragens por dia, pela média do custo "
-                   f"diário nos 6 meses: é o orçamento esperado, pois inclui os dias caros. {SCANNER_NOTE}"
-                   f"{scanner_ranges(stem)}", out_dir, stem)
+                   mean_caption, out_dir, stem)
     scanner_annual(median_of("annual"), "entre-redes-exploradores-projecao-anual-mediana.png",
                    "Ritmo de um dia típico, anualizado (mediana)", "Custo anualizado",
-                   "Custo de um dia típico, anualizado, por número de ancoragens por dia: a mediana do custo diário "
-                   "nos 6 meses × 365. Mostra quanto o ano custaria se todos os dias fossem típicos; não é uma "
-                   f"previsão de gasto, pois não inclui o peso dos dias caros. {SCANNER_NOTE}", out_dir,
-                   table("median", "annual")[1])
+                   median_caption, out_dir, median_stem)
+    if not LINEAR:
+        scanner_annual_horizontal(mean_of("annual"), "entre-redes-exploradores-projecao-anual-media-horizontal.png",
+                                  "Custo anual", mean_caption, out_dir, stem)
+        scanner_annual_horizontal(median_of("annual"), "entre-redes-exploradores-projecao-anual-mediana-horizontal.png",
+                                  "Custo anualizado", median_caption, out_dir, median_stem)
     scanner_cost_24h(mean_of("cost-24h"), mean_of("summary"), median_of("summary"), out_dir, table("mean", "cost-24h")[1])
     scanner_per_record(mean_of("per-record"), median_of("per-record"), out_dir, table("mean", "per-record")[1])
     scanner_tables(mean_of("summary"), median_of("summary"), mean_of("deploy"), median_of("deploy"), out_dir,
@@ -878,7 +918,7 @@ def anchor_total_time(raw, out_dir, stem):
     decimal_comma(ax)
     ax.set_xlabel("Registros no lote")
     ax.set_ylabel("Tempo total por lote (s)")
-    ax.set_title("Tempo de processamento de um lote na ancoragem")
+    # ax.set_title("Tempo de processamento de um lote na ancoragem")
     ax.legend(loc="upper left")
     counts = [len(t) for t in totals]
     save(fig, out_dir, "anchor-perf-tempo.png",
@@ -976,7 +1016,7 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
         ax.set_ylim(low, high * 2)  # room for the ratio labels above the top point
         ax.set_xlabel("Registros no lote (escala log)")
         ax.set_ylabel("Tempo de processamento (s, média; escala log)")
-    ax.set_title("Processamento por conjunto de registros: ancoragem vs auditoria")
+    # ax.set_title("Processamento por conjunto de registros: ancoragem vs auditoria")
     ax.legend(loc="upper left")
 
     limit = (audit_meta.get("options") or {}).get("maxBatchSize")
