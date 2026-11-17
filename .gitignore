@@ -41,6 +41,10 @@ docker-compose.override.yml
 
 # Benchmark result dumps (apps/anchor-service/bench/perf.ts, bench/cross-chain.ts)
 apps/anchor-service/bench/results/
+apps/monitor-service/bench/results/
+
+# Chart tool virtualenv (tools/bench-charts)
+tools/bench-charts/.venv/
 
 *.test.ts
 test-db.ts
@@ -49,3 +53,6 @@ apps/anchor-service/test/wip-max-batch-size/cycle.test.ts.bak
 apps/anchor-service/test/wip-max-batch-size/metrics.test.ts.bak
 apps/monitor-service/test/wip-build-merkle-tree/audit-integration.test.ts.bak
 apps/monitor-service/test/wip-build-merkle-tree/audit.test.ts.bak
+
+tools/bench-charts/COMMANDS.md
+tools/bench-charts/__pycache__/plot.cpython-314.pyc

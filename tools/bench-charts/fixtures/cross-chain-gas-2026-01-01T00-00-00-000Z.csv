@@ -1,0 +1,4 @@
+kind,network,anchorings,anchoringTestnetGas,anchoringMainnetGas,anchoringTestnetOverMainnet,deployTestnetGas,deployMainnetGas,deployTestnetOverMainnet
+ethereum,sepolia,31,473640,120560,3.9286662242866623,4442948,661743,6.714008308361403
+polygon,amoy,31,134828,134828,1.0,658734,665129,0.9903853237492276
+arbitrum,arbitrum-sepolia,31,120560,120560,1.0,655374,661743,0.9903754176470322

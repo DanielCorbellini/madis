@@ -1,0 +1,191 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 1000,
+    "perRecordUsd": 5.555555555555555e-05,
+    "perRecordBrl": 0.0003
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 2000,
+    "perRecordUsd": 2.7777777777777776e-05,
+    "perRecordBrl": 0.00015
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 5000,
+    "perRecordUsd": 1.111111111111111e-05,
+    "perRecordBrl": 5.9999999999999995e-05
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 10000,
+    "perRecordUsd": 5.555555555555555e-06,
+    "perRecordBrl": 2.9999999999999997e-05
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 20000,
+    "perRecordUsd": 2.7777777777777775e-06,
+    "perRecordBrl": 1.4999999999999999e-05
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 50000,
+    "perRecordUsd": 1.111111111111111e-06,
+    "perRecordBrl": 6e-06
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 100000,
+    "perRecordUsd": 5.555555555555555e-07,
+    "perRecordBrl": 3e-06
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 200000,
+    "perRecordUsd": 2.7777777777777776e-07,
+    "perRecordBrl": 1.5e-06
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "batchSize": 500000,
+    "perRecordUsd": 1.1111111111111111e-07,
+    "perRecordBrl": 6e-07
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 1000,
+    "perRecordUsd": 4.6296296296296296e-06,
+    "perRecordBrl": 2.5e-05
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 2000,
+    "perRecordUsd": 2.3148148148148148e-06,
+    "perRecordBrl": 1.25e-05
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 5000,
+    "perRecordUsd": 9.259259259259258e-07,
+    "perRecordBrl": 5e-06
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 10000,
+    "perRecordUsd": 4.629629629629629e-07,
+    "perRecordBrl": 2.5e-06
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 20000,
+    "perRecordUsd": 2.3148148148148146e-07,
+    "perRecordBrl": 1.25e-06
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 50000,
+    "perRecordUsd": 9.259259259259259e-08,
+    "perRecordBrl": 5e-07
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 100000,
+    "perRecordUsd": 4.6296296296296295e-08,
+    "perRecordBrl": 2.5e-07
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 200000,
+    "perRecordUsd": 2.3148148148148148e-08,
+    "perRecordBrl": 1.25e-07
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "batchSize": 500000,
+    "perRecordUsd": 9.259259259259259e-09,
+    "perRecordBrl": 5.0000000000000004e-08
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 1000,
+    "perRecordUsd": 5.555555555555555e-06,
+    "perRecordBrl": 2.9999999999999997e-05
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 2000,
+    "perRecordUsd": 2.7777777777777775e-06,
+    "perRecordBrl": 1.4999999999999999e-05
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 5000,
+    "perRecordUsd": 1.111111111111111e-06,
+    "perRecordBrl": 6e-06
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 10000,
+    "perRecordUsd": 5.555555555555555e-07,
+    "perRecordBrl": 3e-06
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 20000,
+    "perRecordUsd": 2.7777777777777776e-07,
+    "perRecordBrl": 1.5e-06
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 50000,
+    "perRecordUsd": 1.111111111111111e-07,
+    "perRecordBrl": 6e-07
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 100000,
+    "perRecordUsd": 5.555555555555555e-08,
+    "perRecordBrl": 3e-07
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 200000,
+    "perRecordUsd": 2.7777777777777774e-08,
+    "perRecordBrl": 1.5e-07
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "batchSize": 500000,
+    "perRecordUsd": 1.111111111111111e-08,
+    "perRecordBrl": 6e-08
+  }
+]

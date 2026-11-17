@@ -8,7 +8,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "node --import tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1"
+    "test": "tsx --test --test-concurrency=1",
+    "bench:detection": "tsx bench/detection.ts",
+    "bench:perf": "tsx bench/perf.ts",
+    "bench:audit-cost": "tsx bench/audit-cost.ts"
   },
   "dependencies": {
     "contracts-shared": "workspace:*",

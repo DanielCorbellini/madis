@@ -1,0 +1,4 @@
+kind,network,costPerAnchoringBrl,costPerAnchoringUsd,annualBaseBrl,inclusionMedianS,finalityMedianS,finalityP95S,failureRate,rpcCallsMean,trustModel
+ethereum,sepolia,0.54,0.09999999999999999,1576.8,15,900,1080.0,0,40,Consenso da própria Ethereum (máxima descentralização)
+polygon,amoy,0.03125,0.005787037037037037,91.25,3.5,5,6.0,0,40,Conjunto próprio de validadores da Polygon
+arbitrum,arbitrum-sepolia,0.0375,0.006944444444444444,109.5,1.5,1100,1320.0,0,40,Segurança da Ethereum via provas de fraude; sequenciador centralizado

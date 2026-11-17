@@ -1,0 +1,41 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "costPerAnchoringBrl": 0.44999999999999996,
+    "costPerAnchoringUsd": 0.08333333333333333,
+    "annualBaseBrl": 1314.0,
+    "inclusionMedianS": 15,
+    "finalityMedianS": 900,
+    "finalityP95S": 1080.0,
+    "failureRate": 0,
+    "rpcCallsMean": 40,
+    "trustModel": "Consenso da pr\u00f3pria Ethereum (m\u00e1xima descentraliza\u00e7\u00e3o)"
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "costPerAnchoringBrl": 0.03,
+    "costPerAnchoringUsd": 0.005555555555555555,
+    "annualBaseBrl": 87.6,
+    "inclusionMedianS": 3.5,
+    "finalityMedianS": 5,
+    "finalityP95S": 6.0,
+    "failureRate": 0,
+    "rpcCallsMean": 40,
+    "trustModel": "Conjunto pr\u00f3prio de validadores da Polygon"
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "costPerAnchoringBrl": 0.03,
+    "costPerAnchoringUsd": 0.005555555555555555,
+    "annualBaseBrl": 87.6,
+    "inclusionMedianS": 1.5,
+    "finalityMedianS": 1100,
+    "finalityP95S": 1320.0,
+    "failureRate": 0,
+    "rpcCallsMean": 40,
+    "trustModel": "Seguran\u00e7a da Ethereum via provas de fraude; sequenciador centralizado"
+  }
+]

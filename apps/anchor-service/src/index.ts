@@ -19,7 +19,11 @@ export async function main() {
   const logger = createLogger(config.logLevel);
 
   logger.info(
-    { chainId: config.chainId, contract: config.contractAddress },
+    {
+      chainId: config.chainId,
+      contract: config.contractAddress,
+      pollingIntervalMs: config.pollingIntervalMs,
+    },
     "anchor-service starting",
   );
 

@@ -1,0 +1,110 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "metric": "inclusionS",
+    "n": 30,
+    "mean": 17.280566666666665,
+    "stdev": 4.325670366092631,
+    "median": 18.045,
+    "p95": 23.567,
+    "min": 10.614,
+    "max": 23.825
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "metric": "finalityS",
+    "n": 30,
+    "mean": 947.1314666666667,
+    "stdev": 104.71094937632813,
+    "median": 953.5235,
+    "p95": 1098.024,
+    "min": 774.161,
+    "max": 1109.562
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "metric": "costBrl",
+    "n": 31,
+    "mean": 0.2996841839418111,
+    "stdev": 0.1108542190035661,
+    "median": 0.2864989992384075,
+    "p95": 0.44931765168396126,
+    "min": 0.1335251422870635,
+    "max": 0.4750017428840413
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "metric": "inclusionS",
+    "n": 31,
+    "mean": 3.9840967741935485,
+    "stdev": 0.9472458447111713,
+    "median": 3.694,
+    "p95": 5.408,
+    "min": 2.457,
+    "max": 5.577
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "metric": "finalityS",
+    "n": 31,
+    "mean": 5.358483870967742,
+    "stdev": 0.5292426583315535,
+    "median": 5.39,
+    "p95": 6.191,
+    "min": 4.328,
+    "max": 6.226
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "metric": "costBrl",
+    "n": 31,
+    "mean": 0.024918424560491773,
+    "stdev": 0.009028847355139345,
+    "median": 0.026269415708935352,
+    "p95": 0.03716856577647034,
+    "min": 0.011774340693836365,
+    "max": 0.03897454428058019
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "metric": "inclusionS",
+    "n": 31,
+    "mean": 1.6241612903225806,
+    "stdev": 0.39683725436457307,
+    "median": 1.62,
+    "p95": 2.221,
+    "min": 1.067,
+    "max": 2.308
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "metric": "finalityS",
+    "n": 31,
+    "mean": 1132.4418064516128,
+    "stdev": 134.7463960619898,
+    "median": 1118.116,
+    "p95": 1335.835,
+    "min": 944.16,
+    "max": 1364.262
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "metric": "costBrl",
+    "n": 31,
+    "mean": 0.03002631027432058,
+    "stdev": 0.010925935239711825,
+    "median": 0.0297582796887904,
+    "p95": 0.045956538887341275,
+    "min": 0.012565612249961293,
+    "max": 0.04732251879278254
+  }
+]

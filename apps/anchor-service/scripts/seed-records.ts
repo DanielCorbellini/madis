@@ -123,13 +123,22 @@ function parseCliArgs(argv: string[]): {
   };
 }
 
-/** The only `admin_user` use in this service — explicitly test/fixture-only (§14). */
+const TRUNCATED_TABLES = ["records", "batches", "anchor_records", "integrity_alerts"];
+
+/**
+ * The only `admin_user` use in this service — explicitly test/fixture-only (§14).
+ * Ids restart via `setval`, not `RESTART IDENTITY`: the latter needs to own the
+ * sequences, and on a fresh volume the superuser that ran schema.sql owns them.
+ */
 export async function truncateAll(adminDatabaseUrl: string): Promise<void> {
   const admin = new Pool({ connectionString: adminDatabaseUrl });
   try {
-    await admin.query(
-      "TRUNCATE records, batches, anchor_records, integrity_alerts RESTART IDENTITY CASCADE",
-    );
+    await admin.query(`TRUNCATE ${TRUNCATED_TABLES.join(", ")} CASCADE`);
+    for (const table of TRUNCATED_TABLES) {
+      await admin.query("SELECT setval(pg_get_serial_sequence($1, 'id'), 1, false)", [
+        table,
+      ]);
+    }
   } finally {
     await admin.end();
   }

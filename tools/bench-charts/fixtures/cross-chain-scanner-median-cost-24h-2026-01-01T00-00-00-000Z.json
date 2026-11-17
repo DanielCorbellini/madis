@@ -1,0 +1,866 @@
+[
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 0,
+    "scheduledAt": "2026-01-01T00:00:00.000Z",
+    "warmUp": true,
+    "costUsd": 0.05149293604569334,
+    "costBrl": 0.27806185464674404
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 0,
+    "scheduledAt": "2026-01-01T00:00:00.000Z",
+    "warmUp": true,
+    "costUsd": 0.004402841690499464,
+    "costBrl": 0.023775345128697112
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 0,
+    "scheduledAt": "2026-01-01T00:00:00.000Z",
+    "warmUp": true,
+    "costUsd": 0.0057239921919141805,
+    "costBrl": 0.030909557836336574
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 1,
+    "scheduledAt": "2026-01-01T00:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.055833564483440665,
+    "costBrl": 0.3015012482105796
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 1,
+    "scheduledAt": "2026-01-01T00:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005332364268005181,
+    "costBrl": 0.028794767047227977
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 1,
+    "scheduledAt": "2026-01-01T00:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006353570399253817,
+    "costBrl": 0.034309280155970616
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 2,
+    "scheduledAt": "2026-01-01T01:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07083303681536789,
+    "costBrl": 0.3824983988029866
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 2,
+    "scheduledAt": "2026-01-01T01:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00556940585978252,
+    "costBrl": 0.030074791642825612
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 2,
+    "scheduledAt": "2026-01-01T01:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00632238361433582,
+    "costBrl": 0.034140871517413435
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 3,
+    "scheduledAt": "2026-01-01T02:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.06814775388622914,
+    "costBrl": 0.36799787098563735
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 3,
+    "scheduledAt": "2026-01-01T02:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0056895283645788525,
+    "costBrl": 0.03072345316872581
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 3,
+    "scheduledAt": "2026-01-01T02:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0070791218324725794,
+    "costBrl": 0.03822725789535193
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 4,
+    "scheduledAt": "2026-01-01T03:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07923298003234866,
+    "costBrl": 0.4278580921746828
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 4,
+    "scheduledAt": "2026-01-01T03:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005999348604762523,
+    "costBrl": 0.03239648246571763
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 4,
+    "scheduledAt": "2026-01-01T03:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007126977985616236,
+    "costBrl": 0.038485681122327677
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 5,
+    "scheduledAt": "2026-01-01T03:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.08127632479683357,
+    "costBrl": 0.43889215390290126
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 5,
+    "scheduledAt": "2026-01-01T03:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006883067736383396,
+    "costBrl": 0.03716856577647034
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 5,
+    "scheduledAt": "2026-01-01T03:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007990286742403667,
+    "costBrl": 0.0431475484089798
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 6,
+    "scheduledAt": "2026-01-01T04:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0815042392833074,
+    "costBrl": 0.44012289212985994
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 6,
+    "scheduledAt": "2026-01-01T04:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00654892378561216,
+    "costBrl": 0.03536418844230567
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 6,
+    "scheduledAt": "2026-01-01T04:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007781227907219018,
+    "costBrl": 0.0420186306989827
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 7,
+    "scheduledAt": "2026-01-01T05:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.08486789061637195,
+    "costBrl": 0.4582866093284086
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 7,
+    "scheduledAt": "2026-01-01T05:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006794747542104435,
+    "costBrl": 0.036691636727363953
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 7,
+    "scheduledAt": "2026-01-01T05:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.008602296599968105,
+    "costBrl": 0.04645240163982777
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 8,
+    "scheduledAt": "2026-01-01T06:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.08320697253406689,
+    "costBrl": 0.44931765168396126
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 8,
+    "scheduledAt": "2026-01-01T06:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007131774163155183,
+    "costBrl": 0.038511580481038
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 8,
+    "scheduledAt": "2026-01-01T06:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.008213926326646307,
+    "costBrl": 0.04435520216389006
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 9,
+    "scheduledAt": "2026-01-01T06:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.08796328571926691,
+    "costBrl": 0.4750017428840413
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 9,
+    "scheduledAt": "2026-01-01T06:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007217508200107442,
+    "costBrl": 0.03897454428058019
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 9,
+    "scheduledAt": "2026-01-01T06:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00876342940607084,
+    "costBrl": 0.04732251879278254
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 10,
+    "scheduledAt": "2026-01-01T07:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07825025605006251,
+    "costBrl": 0.4225513826703376
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 10,
+    "scheduledAt": "2026-01-01T07:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006276808052328331,
+    "costBrl": 0.03389476348257299
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 10,
+    "scheduledAt": "2026-01-01T07:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.008510470164322458,
+    "costBrl": 0.045956538887341275
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 11,
+    "scheduledAt": "2026-01-01T08:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07822132547857752,
+    "costBrl": 0.4223951575843186
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 11,
+    "scheduledAt": "2026-01-01T08:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006090152136175662,
+    "costBrl": 0.032886821535348575
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 11,
+    "scheduledAt": "2026-01-01T08:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007467867144140131,
+    "costBrl": 0.04032648257835671
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 12,
+    "scheduledAt": "2026-01-01T09:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07272719906580925,
+    "costBrl": 0.39272687495536995
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 12,
+    "scheduledAt": "2026-01-01T09:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006307543892754983,
+    "costBrl": 0.03406073702087691
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 12,
+    "scheduledAt": "2026-01-01T09:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006907369928290799,
+    "costBrl": 0.037299797612770316
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 13,
+    "scheduledAt": "2026-01-01T09:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.07081349222591224,
+    "costBrl": 0.3823928580199261
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 13,
+    "scheduledAt": "2026-01-01T09:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006098010177952923,
+    "costBrl": 0.032929254960945786
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 13,
+    "scheduledAt": "2026-01-01T09:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.007367220290919728,
+    "costBrl": 0.039782989570966536
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 14,
+    "scheduledAt": "2026-01-01T10:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.05949067783894802,
+    "costBrl": 0.3212496603303193
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 14,
+    "scheduledAt": "2026-01-01T10:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005173175556521467,
+    "costBrl": 0.02793514800521593
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 14,
+    "scheduledAt": "2026-01-01T10:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.006313214710540286,
+    "costBrl": 0.034091359436917545
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 15,
+    "scheduledAt": "2026-01-01T11:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.05977978243552978,
+    "costBrl": 0.3228108251518608
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 15,
+    "scheduledAt": "2026-01-01T11:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005152212914199019,
+    "costBrl": 0.027821949736674706
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 15,
+    "scheduledAt": "2026-01-01T11:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0059184122603554955,
+    "costBrl": 0.03195942620591968
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 16,
+    "scheduledAt": "2026-01-01T12:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.05305537022933472,
+    "costBrl": 0.2864989992384075
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 16,
+    "scheduledAt": "2026-01-01T12:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004864706612765806,
+    "costBrl": 0.026269415708935352
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 16,
+    "scheduledAt": "2026-01-01T12:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005510792534961184,
+    "costBrl": 0.0297582796887904
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 17,
+    "scheduledAt": "2026-01-01T12:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.04310013073067463,
+    "costBrl": 0.232740705945643
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 17,
+    "scheduledAt": "2026-01-01T12:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.003723495219965395,
+    "costBrl": 0.020106874187813137
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 17,
+    "scheduledAt": "2026-01-01T12:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004895388231679807,
+    "costBrl": 0.02643509645107096
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 18,
+    "scheduledAt": "2026-01-01T13:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.046572330549655774,
+    "costBrl": 0.2514905849681412
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 18,
+    "scheduledAt": "2026-01-01T13:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0037427826943167825,
+    "costBrl": 0.020211026549310628
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 18,
+    "scheduledAt": "2026-01-01T13:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004127716334564438,
+    "costBrl": 0.022289668206647965
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 19,
+    "scheduledAt": "2026-01-01T14:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03632179135851351,
+    "costBrl": 0.19613767333597296
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 19,
+    "scheduledAt": "2026-01-01T14:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00303402027127449,
+    "costBrl": 0.016383709464882247
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 19,
+    "scheduledAt": "2026-01-01T14:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0043440485608649835,
+    "costBrl": 0.02345786222867091
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 20,
+    "scheduledAt": "2026-01-01T15:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.031781687377889056,
+    "costBrl": 0.1716211118406009
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 20,
+    "scheduledAt": "2026-01-01T15:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0024499169373414444,
+    "costBrl": 0.013229551461643802
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 20,
+    "scheduledAt": "2026-01-01T15:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.003531415924417066,
+    "costBrl": 0.01906964599185216
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 21,
+    "scheduledAt": "2026-01-01T15:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03660928672361912,
+    "costBrl": 0.19769014830754325
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 21,
+    "scheduledAt": "2026-01-01T15:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.002499101299360775,
+    "costBrl": 0.013495147016548187
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 21,
+    "scheduledAt": "2026-01-01T15:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00332801509245877,
+    "costBrl": 0.01797128149927736
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 22,
+    "scheduledAt": "2026-01-01T16:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.024726878201308054,
+    "costBrl": 0.1335251422870635
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 22,
+    "scheduledAt": "2026-01-01T16:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.002426661793993529,
+    "costBrl": 0.013103973687565058
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 22,
+    "scheduledAt": "2026-01-01T16:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.003356303427678878,
+    "costBrl": 0.018124038509465944
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 23,
+    "scheduledAt": "2026-01-01T17:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.026039035511251186,
+    "costBrl": 0.14061079176075642
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 23,
+    "scheduledAt": "2026-01-01T17:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0021804334618215487,
+    "costBrl": 0.011774340693836365
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 23,
+    "scheduledAt": "2026-01-01T17:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.003170526178967004,
+    "costBrl": 0.01712084136642182
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 24,
+    "scheduledAt": "2026-01-01T18:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03213312978196513,
+    "costBrl": 0.1735189008226117
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 24,
+    "scheduledAt": "2026-01-01T18:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0027732376923483297,
+    "costBrl": 0.014975483538680981
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 24,
+    "scheduledAt": "2026-01-01T18:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0023269652314743135,
+    "costBrl": 0.012565612249961293
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 25,
+    "scheduledAt": "2026-01-01T18:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.025729527870373085,
+    "costBrl": 0.13893945050001466
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 25,
+    "scheduledAt": "2026-01-01T18:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0027257606565259337,
+    "costBrl": 0.014719107545240043
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 25,
+    "scheduledAt": "2026-01-01T18:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0026598940008369866,
+    "costBrl": 0.01436342760451973
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 26,
+    "scheduledAt": "2026-01-01T19:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03606300908746452,
+    "costBrl": 0.1947402490723084
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 26,
+    "scheduledAt": "2026-01-01T19:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0026319757729341047,
+    "costBrl": 0.014212669173844167
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 26,
+    "scheduledAt": "2026-01-01T19:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0026272853105910724,
+    "costBrl": 0.014187340677191792
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 27,
+    "scheduledAt": "2026-01-01T20:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03773994169532384,
+    "costBrl": 0.20379568515474875
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 27,
+    "scheduledAt": "2026-01-01T20:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0031018447988359135,
+    "costBrl": 0.016749961913713935
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 27,
+    "scheduledAt": "2026-01-01T20:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0031020031709542233,
+    "costBrl": 0.01675081712315281
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 28,
+    "scheduledAt": "2026-01-01T21:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.04236223925749445,
+    "costBrl": 0.22875609199047006
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 28,
+    "scheduledAt": "2026-01-01T21:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0031292617262596674,
+    "costBrl": 0.016898013321802206
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 28,
+    "scheduledAt": "2026-01-01T21:00:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004166223957738805,
+    "costBrl": 0.022497609371789552
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 29,
+    "scheduledAt": "2026-01-01T21:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.03811308526757916,
+    "costBrl": 0.20581066044492746
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 29,
+    "scheduledAt": "2026-01-01T21:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0031282574892183067,
+    "costBrl": 0.01689259044177886
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 29,
+    "scheduledAt": "2026-01-01T21:45:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004177231265439859,
+    "costBrl": 0.022557048833375243
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 30,
+    "scheduledAt": "2026-01-01T22:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.04492090599556143,
+    "costBrl": 0.2425728923760317
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 30,
+    "scheduledAt": "2026-01-01T22:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.00436317191924261,
+    "costBrl": 0.023561128363910097
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 30,
+    "scheduledAt": "2026-01-01T22:30:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.0052340933140593284,
+    "costBrl": 0.02826410389592038
+  },
+  {
+    "kind": "ethereum",
+    "network": "sepolia",
+    "tick": 31,
+    "scheduledAt": "2026-01-01T23:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.05299207321031696,
+    "costBrl": 0.2861571953357116
+  },
+  {
+    "kind": "polygon",
+    "network": "amoy",
+    "tick": 31,
+    "scheduledAt": "2026-01-01T23:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.004011015468861076,
+    "costBrl": 0.021659483531849818
+  },
+  {
+    "kind": "arbitrum",
+    "network": "arbitrum-sepolia",
+    "tick": 31,
+    "scheduledAt": "2026-01-01T23:15:00.000Z",
+    "warmUp": false,
+    "costUsd": 0.005097584836672418,
+    "costBrl": 0.027526958118031058
+  }
+]

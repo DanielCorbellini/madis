@@ -1,0 +1,121 @@
+import { execFileSync } from "node:child_process";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+export interface WriteResultsOutput {
+  jsonPath: string;
+  csvPath: string;
+  metaPath: string | null;
+}
+
+/** Machine, code and options a bench run used, so a chart can be traced back to it. */
+export interface RunMetadata {
+  cpuModel: string;
+  cpuCores: number;
+  totalMemBytes: number;
+  platform: string;
+  osRelease: string;
+  nodeVersion: string;
+  gitCommit: string | null;
+  gitDirty: boolean | null;
+  options: Record<string, unknown>;
+  startedAt: string;
+  finishedAt: string;
+  [extra: string]: unknown;
+}
+
+function git(args: string[]): string | null {
+  try {
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function collectRunMetadata(
+  options: Record<string, unknown>,
+  startedAt: Date,
+  finishedAt: Date = new Date(),
+): RunMetadata {
+  const cpus = os.cpus();
+  const status = git(["status", "--porcelain"]);
+
+  return {
+    cpuModel: cpus[0]?.model ?? "unknown",
+    cpuCores: cpus.length,
+    totalMemBytes: os.totalmem(),
+    platform: os.platform(),
+    osRelease: os.release(),
+    nodeVersion: process.version,
+    gitCommit: git(["rev-parse", "--short", "HEAD"]),
+    gitDirty: status === null ? null : status.length > 0,
+    options,
+    startedAt: startedAt.toISOString(),
+    finishedAt: finishedAt.toISOString(),
+  };
+}
+
+// RFC 4180: quote a cell holding a comma, quote or line break, doubling its quotes.
+function toCsvCell(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/**
+ * Writes through a temporary file and a rename, so an interruption (a crash
+ * or a power loss) leaves either the previous file or the new one, never a
+ * truncated one that a resumed run could not read.
+ */
+async function writeAtomically(file: string, content: string): Promise<void> {
+  const temporary = `${file}.tmp`;
+  await writeFile(temporary, content);
+  await rename(temporary, file);
+}
+
+/**
+ * Writes `rows` as `<prefix>-<timestamp>.{json,csv}` under `resultsDir`
+ * (created if missing), plus `<prefix>-<timestamp>.meta.json` when
+ * `metadata` is given. A fixed `timestamp` (same format) makes repeated calls
+ * rewrite the same files, for runs saved incrementally.
+ */
+export async function writeResults(
+  prefix: string,
+  rows: Array<Record<string, unknown>>,
+  resultsDir: string,
+  metadata?: RunMetadata,
+  timestamp: string = new Date().toISOString().replace(/[:.]/g, "-"),
+): Promise<WriteResultsOutput> {
+  if (rows.length === 0) {
+    throw new Error(`writeResults("${prefix}", ...) was called with zero rows`);
+  }
+
+  await mkdir(resultsDir, { recursive: true });
+
+  const stem = path.join(resultsDir, `${prefix}-${timestamp}`);
+  const jsonPath = `${stem}.json`;
+  const csvPath = `${stem}.csv`;
+
+  await writeAtomically(jsonPath, JSON.stringify(rows, null, 2));
+
+  const header = Object.keys(rows[0]);
+  const lines = [
+    header.join(","),
+    ...rows.map((row) => header.map((key) => toCsvCell(row[key])).join(",")),
+  ];
+  await writeAtomically(csvPath, `${lines.join("\n")}\n`);
+
+  let metaPath: string | null = null;
+  if (metadata) {
+    metaPath = `${stem}.meta.json`;
+    await writeAtomically(metaPath, JSON.stringify(metadata, null, 2));
+  }
+
+  return { jsonPath, csvPath, metaPath };
+}

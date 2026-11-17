@@ -1,0 +1,13 @@
+kind,network,perDay,annualUsd,annualBrl
+ethereum,sepolia,1,36.49999999999999,197.1
+ethereum,sepolia,8,291.99999999999994,1576.8
+ethereum,sepolia,24,876.0,4730.4
+ethereum,sepolia,96,3504.0,18921.6
+polygon,amoy,1,2.112268518518518,11.40625
+polygon,amoy,8,16.898148148148145,91.25
+polygon,amoy,24,50.694444444444436,273.75000000000006
+polygon,amoy,96,202.77777777777774,1095.0000000000002
+arbitrum,arbitrum-sepolia,1,2.5347222222222223,13.6875
+arbitrum,arbitrum-sepolia,8,20.27777777777778,109.5
+arbitrum,arbitrum-sepolia,24,60.83333333333332,328.5
+arbitrum,arbitrum-sepolia,96,243.3333333333333,1314.0

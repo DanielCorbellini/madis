@@ -1,3 +1,5 @@
+export * from "./bench-plan.ts";
+export * from "./bench-results.ts";
 export * from "./chain.ts";
 export * from "./config.ts";
 export * from "./db.ts";

@@ -14,7 +14,8 @@ import type { AnchorConfig } from "./config.ts";
 type ChainClientConfig = Pick<
   AnchorConfig,
   "rpcUrl" | "contractAddress" | "anchorPrivateKey"
->;
+> &
+  Partial<Pick<AnchorConfig, "pollingIntervalMs">>;
 
 export interface ChainClient {
   provider: JsonRpcProvider;
@@ -59,6 +60,9 @@ export interface ChainProvider {
 export function createChainClient(config: ChainClientConfig): ChainClient {
   const provider = new JsonRpcProvider(config.rpcUrl, undefined, {
     staticNetwork: true,
+    ...(config.pollingIntervalMs !== undefined && {
+      pollingInterval: config.pollingIntervalMs,
+    }),
   });
   const wallet = new Wallet(config.anchorPrivateKey, provider);
   const contract = adaptMerkleAnchorRegistry(

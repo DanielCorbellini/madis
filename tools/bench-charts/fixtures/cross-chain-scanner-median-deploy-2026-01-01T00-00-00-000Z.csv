@@ -1,0 +1,4 @@
+kind,network,testnetGasUsed,mainnetGas,costUsd,costBrl
+ethereum,sepolia,4442948,661743,0.41666666666666663,2.25
+polygon,amoy,658734,665129,0.027777777777777776,0.15
+arbitrum,arbitrum-sepolia,655374,661743,0.027777777777777776,0.15
