@@ -19,7 +19,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.ticker import FuncFormatter  # noqa: E402
+from matplotlib.ticker import FuncFormatter, MultipleLocator, NullLocator  # noqa: E402
 
 PREFIXES = ["perf", "cross-chain", "monitor-perf", "monitor-detection", "monitor-sizing",
             "monitor-audit-cost", "cross-chain-cost-24h", "cross-chain-annual", "cross-chain-per-record",
@@ -225,6 +225,38 @@ def monitor_perf(rows, out_dir, stem):
          f"Média de {cycles_text} ciclos medidos por ponto (após um ciclo de aquecimento "
          "descartado); a barra indica o desvio padrão.", stem)
 
+    # Log-log: every M stays visible and the sampling lines no longer sit on the x axis.
+    monitor_time_log(rows, out_dir, stem, "monitor-custo-tempo-log.png",
+                     f"Tempo por ciclo do monitor em função do número de lotes ({batch} registros "
+                     "por lote), em escala logarítmica nos dois eixos. Média de "
+                     f"{cycles_text} ciclos medidos por ponto (após um ciclo de aquecimento "
+                     "descartado).")
+    monitor_time_log([r for r in rows if r["config"] != "sampling-1h"], out_dir, stem,
+                     "monitor-custo-tempo-log-sem-garantia.png",
+                     f"Tempo por ciclo do monitor em função do número de lotes ({batch} registros "
+                     "por lote), na varredura completa e na amostragem com k = 3, em escala "
+                     f"logarítmica nos dois eixos. Média de {cycles_text} ciclos medidos por ponto.")
+    monitor_time_log([r for r in rows if r["config"] == "full"], out_dir, stem,
+                     "monitor-custo-tempo-log-varredura-completa.png",
+                     f"Tempo por ciclo da varredura completa em função do número de lotes ({batch} "
+                     "registros por lote), em escala logarítmica nos dois eixos. Média de "
+                     f"{cycles_text} ciclos medidos por ponto.")
+
+    # The full rescan alone on linear axes: a straight line through the origin reads as
+    # "proportional to the history" without needing log scales.
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    full = [r for r in rows if r["config"] == "full"]
+    config_lines(ax, full, lambda r: r["durationMs"] / 1000)
+    ax.set_xscale("linear")
+    ax.set_xlim(0, max(r["m"] for r in full) * 1.05)
+    ax.xaxis.set_major_formatter(THOUSANDS)
+    ax.set_xlabel("Lotes ancorados (M)")
+    ax.set_ylabel("Tempo por ciclo (s, média ± desvio padrão)")
+    save(fig, out_dir, "monitor-custo-tempo-varredura-completa.png",
+         f"Tempo por ciclo da varredura completa em função do número de lotes ({batch} "
+         f"registros por lote). Média de {cycles_text} ciclos medidos por ponto; a barra indica "
+         "o desvio padrão.", stem)
+
     fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.4))
     config_lines(ax, rows, lambda r: (r["cpuUserMs"] + r["cpuSystemMs"]) / 1000)
     ax.set_ylabel("Tempo de CPU por ciclo (s, média ± desvio padrão)")
@@ -240,6 +272,23 @@ def monitor_perf(rows, out_dir, stem):
          "Pico de memória residente (RSS) do processo por ciclo; cada configuração "
          "roda em um processo próprio. A memória é praticamente a mesma nas três "
          "configurações e não cresce com M, porque o monitor audita um lote por vez.", stem)
+
+
+def monitor_time_log(rows, out_dir, stem, name, caption):
+    """Cycle time on log-log axes, for whichever configurations `rows` holds."""
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    config_lines(ax, rows, lambda r: r["durationMs"] / 1000)
+    ms = sorted({r["m"] for r in rows})
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlim(ms[0] * 0.8, ms[-1] * 1.25)  # config_lines pins left=0 in --linear mode
+    ax.set_ylim(0.5, 1000)
+    ax.set_xticks(ms, [f"{m:,}".replace(",", ".") for m in ms])
+    ax.xaxis.set_minor_locator(NullLocator())
+    decimal_comma(ax)
+    ax.set_xlabel("Lotes ancorados (M, escala log)")
+    ax.set_ylabel("Tempo por ciclo (s, média; escala log)")
+    save(fig, out_dir, name, caption, stem)
 
 
 def monitor_detection(rows, out_dir, stem):
@@ -379,6 +428,41 @@ def repetitions_text(counts) -> str:
         f"média de {low} a {high} repetições por tamanho"
 
 
+def anchor_phase_bars(rows, labels, out_dir, stem, name, caption, skip=frozenset(),
+                      segment_labels=False):
+    """Per record, so every size shares one scale; the label on top stays the full total."""
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    bottom = [0.0] * len(rows)
+    totals = [0.0] * len(rows)
+    for key, label, color in anchor_phases(rows):
+        values = [r[key] / r["n"] for r in rows]
+        totals = [t + v for t, v in zip(totals, values)]
+        if key in skip:
+            continue
+        ax.bar(labels, values, bottom=bottom, color=color, label=label,
+               edgecolor="white", linewidth=1)
+        if segment_labels:
+            for x, (base, value) in enumerate(zip(bottom, values)):
+                ax.annotate(f"{value:.2f}".replace(".", ","), (x, base + value / 2),
+                            ha="center", va="center", fontsize=8.5, color=INK)
+        bottom = [b + v for b, v in zip(bottom, values)]
+    # The labelled variant is the one placed in a document: bigger text, two decimals on top.
+    for x, (top, total) in enumerate(zip(bottom, totals)):
+        text = f"{total:.2f}".replace(".", ",") if segment_labels else br(total)
+        ax.annotate(text, (x, top), textcoords="offset points", xytext=(0, 3),
+                    ha="center", fontsize=9 if segment_labels else 7, color=INK_2)
+    ax.set_ylim(0, max(totals) * 1.3)
+    if segment_labels:
+        ax.yaxis.set_major_locator(MultipleLocator(0.2))
+    decimal_comma(ax)
+    ax.set_xlabel("Registros no lote")
+    ax.set_ylabel("Tempo por registro (ms)")
+    # ax.set_title("Tempo por registro em cada fase da ancoragem")
+    ax.grid(axis="x", visible=False)
+    ax.legend(loc="upper left", ncol=2, fontsize=9 if segment_labels else 7)
+    save(fig, out_dir, name, caption, stem)
+
+
 def anchor_perf(rows, out_dir, stem):
     raw = group_by_n(rows)
     rows = mean_by_n(rows)
@@ -387,30 +471,22 @@ def anchor_perf(rows, out_dir, stem):
     ns = [r["n"] for r in rows]
     labels = [f"{n:,}".replace(",", ".") for n in ns]
 
-    # Per record, so every size shares one scale and the phase mix stays readable.
-    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
-    bottom = [0.0] * len(rows)
-    phases = anchor_phases(rows)
-    for key, label, color in phases:
-        values = [r[key] / r["n"] for r in rows]
-        ax.bar(labels, values, bottom=bottom, color=color, label=label,
-               edgecolor="white", linewidth=1)
-        bottom = [b + v for b, v in zip(bottom, values)]
-    for x, total in enumerate(bottom):
-        ax.annotate(br(total), (x, total), textcoords="offset points", xytext=(0, 3),
-                    ha="center", fontsize=7, color=INK_2)
-    ax.set_ylim(0, max(bottom) * 1.3)
-    decimal_comma(ax)
-    ax.set_xlabel("Registros no lote")
-    ax.set_ylabel("Tempo por registro (ms)")
-    # ax.set_title("Tempo por registro em cada fase da ancoragem")
-    ax.grid(axis="x", visible=False)
-    ax.legend(loc="upper left", ncol=2, fontsize=7)
-    save(fig, out_dir, "anchor-perf-fases.png",
-         "Tempo médio por registro em cada fase do anchor-service, por tamanho de lote "
-         f"({repetitions_text([r['repetitions'] for r in rows])}); o número acima de cada barra "
-         "é o total por registro. O tempo total do lote é esse valor vezes o número de registros.",
-         stem)
+    repetitions = repetitions_text([r["repetitions"] for r in rows])
+    anchor_phase_bars(rows, labels, out_dir, stem, "anchor-perf-fases.png",
+                      "Tempo médio por registro em cada fase do anchor-service, por tamanho de lote "
+                      f"({repetitions}); o número acima de cada barra é o total por registro. O "
+                      "tempo total do lote é esse valor vezes o número de registros.")
+    anchor_phase_bars(rows, labels, out_dir, stem, "anchor-perf-fases-sem-leitura.png",
+                      "Tempo médio por registro em cada fase do anchor-service, por tamanho de lote "
+                      f"({repetitions}); o número acima de cada barra é o total por registro, "
+                      "incluindo a leitura dos registros, que não aparece no gráfico por "
+                      "representar menos de 1% do tempo.", skip={"scanMs"})
+    anchor_phase_bars(rows, labels, out_dir, stem, "anchor-perf-fases-sem-leitura-valores.png",
+                      "Tempo médio por registro em cada fase do anchor-service, por tamanho de lote "
+                      f"({repetitions}), com o valor de cada fase dentro da barra; o número acima "
+                      "de cada barra é o total por registro, incluindo a leitura dos registros, que "
+                      "não aparece no gráfico por representar menos de 1% do tempo.",
+                      skip={"scanMs"}, segment_labels=True)
 
     anchor_total_time(raw, out_dir, stem)
     anchor_phase_table(raw, out_dir, stem)
@@ -894,7 +970,8 @@ def anchor_phases(rows):
     common = (("scanMs", "Leitura", BLUE), ("validateMs", "Verificação das assinaturas", ORANGE),
               ("leafMs", "Folhas", AQUA))
     if all("treeBuildMs" in r for r in rows):
-        return common + (("treeBuildMs", "Árvore", YELLOW), ("proofsMs", "Provas", MAGENTA))
+        return common + (("treeBuildMs", "Construção da árvore", YELLOW),
+                         ("proofsMs", "Geração das provas", MAGENTA))
     return common + (("treeMs", "Árvore e provas", YELLOW),)
 
 
@@ -1033,6 +1110,134 @@ def anchor_vs_audit(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
          "assinaturas. O número acima de cada ponto é "
          f"a razão ancoragem/auditoria.{limit_text} Ancoragem: {perf_stem.name}.csv.",
          audit_stem)
+    anchor_vs_audit_per_record(perf_rows, perf_stem, audit_rows, audit_stem, out_dir)
+
+
+def anchor_vs_audit_per_record(perf_rows, perf_stem, audit_rows, audit_stem, out_dir):
+    def per_record(rows, value):
+        return {n: statistics.mean(value(r) / n for r in g) for n, g in group_by_n(rows).items()}
+
+    anchor = per_record(perf_rows, lambda r: r["totalMs"])
+    audit = per_record(audit_rows, lambda r: r["totalMs"])
+    has_drill = all("drillDownMs" in r for r in audit_rows)
+    series = [(anchor, BLUE, "Ancoragem"), (audit, ORANGE, "Auditoria (lote íntegro)")]
+    if has_drill:
+        located = per_record(audit_rows, lambda r: r["totalMs"] + r["drillDownMs"])
+        series.append((located, AQUA, "Auditoria com localização"))
+    common = sorted(set(anchor) & set(audit))
+    if len(common) < 2:
+        return note("comparacao-ancoragem-auditoria-localizacao-por-registro",
+                    "menos de 2 tamanhos em comum entre as duas execuções")
+
+    # Each group spans 0.84 of a slot; bars are a bit narrower than their step, leaving a small gap.
+    step = 0.84 / len(series)
+    width = step * 0.88
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.8))
+    for index, (values, color, label) in enumerate(series):
+        offset = (index - (len(series) - 1) / 2) * step
+        bars = ax.bar([i + offset for i in range(len(common))], [values[n] for n in common],
+                      width, color=color, label=label)
+        for bar in bars:
+            ax.annotate(f"{bar.get_height():.2f}".replace(".", ","),
+                        (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                        textcoords="offset points", xytext=(0, 2), ha="center", va="bottom",
+                        rotation=90, fontsize=8, color=INK_2)
+    ax.set_xticks(range(len(common)), [f"{n:,}".replace(",", ".") for n in common])
+    ax.set_xlabel("Registros no lote")
+    ax.set_ylabel("Tempo por registro (ms)")
+    ax.set_ylim(0, max(max(values.values()) for values, _, _ in series) * 1.18)
+    ax.yaxis.set_major_locator(MultipleLocator(0.2))
+    decimal_comma(ax)
+    # Above the axes, so the tallest bars' labels never run into it.
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncols=len(series), fontsize=8.5)
+    save(fig, out_dir, "comparacao-ancoragem-auditoria-localizacao-por-registro.png",
+         "Tempo médio de processamento por registro na ancoragem e na auditoria de um lote, sem "
+         "chamadas à blockchain"
+         + ("; a terceira barra soma a verificação da prova de cada registro, executada quando "
+            "a raiz diverge" if has_drill else "")
+         + f". Ancoragem: {perf_stem.name}.csv.", audit_stem)
+
+
+def audit_cost_phases(rows, out_dir, stem):
+    """The anchor's phase chart, for auditing one batch: leaves and root, plus locating."""
+    raw = group_by_n(rows)
+    if len(raw) < 2 or not all("drillDownMs" in r for r in rows):
+        return note("auditoria-fases", "menos de 2 tamanhos ou execução sem a medida de localização")
+    ns = sorted(raw)
+    mean = lambda n, key: statistics.mean(r[key] for r in raw[n]) / n
+    phases = (("leafMs", "Folhas", AQUA), ("rootMs", "Construção da árvore", YELLOW),
+              ("drillDownMs", "Verificação das provas (localização)", MAGENTA))
+    labels = [f"{n:,}".replace(",", ".") for n in ns]
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    bottom = [0.0] * len(ns)
+    for key, label, color in phases:
+        values = [mean(n, key) for n in ns]
+        ax.bar(labels, values, bottom=bottom, color=color, label=label,
+               edgecolor="white", linewidth=1)
+        for x, (base, value) in enumerate(zip(bottom, values)):
+            ax.annotate(f"{value:.2f}".replace(".", ","), (x, base + value / 2),
+                        ha="center", va="center", fontsize=8.5, color=INK)
+        bottom = [b + v for b, v in zip(bottom, values)]
+    # The read phase (under 1%) is left out of the bars but kept in the total on top.
+    totals = [mean(n, "readMs") + top for n, top in zip(ns, bottom)]
+    for x, (top, total) in enumerate(zip(bottom, totals)):
+        ax.annotate(f"{total:.2f}".replace(".", ","), (x, top), textcoords="offset points",
+                    xytext=(0, 3), ha="center", fontsize=9, color=INK_2)
+    ax.set_ylim(0, max(totals) * 1.3)
+    ax.yaxis.set_major_locator(MultipleLocator(0.2))
+    decimal_comma(ax)
+    ax.set_xlabel("Registros no lote")
+    ax.set_ylabel("Tempo por registro (ms)")
+    ax.grid(axis="x", visible=False)
+    ax.legend(loc="upper left", ncol=2, fontsize=9)
+    save(fig, out_dir, "auditoria-fases-sem-leitura-valores.png",
+         "Tempo médio por registro em cada etapa da auditoria de um lote, sem chamadas à "
+         f"blockchain ({repetitions_text([len(raw[n]) for n in ns])}). Folhas e reconstrução da "
+         "raiz formam a auditoria de um lote íntegro; a verificação das provas só é executada "
+         "quando a raiz diverge. O número acima de cada barra é o total por registro, incluindo "
+         "a leitura dos registros, omitida por representar menos de 1% do tempo.", stem)
+
+
+def audit_cost_totals(rows, out_dir, stem, log=False):
+    """Seconds per batch for the two audit scenarios, intact and with locating."""
+    raw = group_by_n(rows)
+    if len(raw) < 2 or not all("drillDownMs" in r for r in rows):
+        return note("auditoria-tempo-por-lote", "menos de 2 tamanhos ou execução sem a medida de localização")
+    ns = sorted(raw)
+    spread = lambda values: statistics.stdev(values) if len(values) > 1 else 0.0
+    series = (("Lote íntegro (folhas + árvore)", BLUE, "o", lambda r: r["totalMs"] / 1000),
+              ("Com localização (folhas + árvore + provas)", MAGENTA, "s",
+               lambda r: (r["totalMs"] + r["drillDownMs"]) / 1000))
+    fig, ax = plt.subplots(figsize=(WIDTH_IN, 3.6))
+    for label, color, marker, value in series:
+        samples = [[value(r) for r in raw[n]] for n in ns]
+        means = [statistics.mean(values) for values in samples]
+        ax.errorbar(ns, means, yerr=[spread(values) for values in samples], color=color,
+                    marker=marker, label=label, capsize=3, elinewidth=1)
+        ax.text(ns[-1] * (1.15 if log else 1.02), means[-1], br(round(means[-1], 1)), va="center", fontsize=8,
+                color=INK_2, clip_on=False)
+    if log:
+        # Log-log: every batch size is visible, and a constant ratio shows as a constant gap.
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xticks(ns, [f"{n:,}".replace(",", ".") for n in ns])
+        ax.xaxis.set_minor_locator(NullLocator())
+        ax.tick_params(axis="x", labelsize=8)
+        ax.set_xlim(ns[0] * 0.75, ns[-1] * 1.35)
+        ax.set_xlabel("Registros no lote (escala log)")
+        ax.set_ylabel("Tempo por lote (s, média; escala log)")
+    else:
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        ax.xaxis.set_major_formatter(THOUSANDS)
+        ax.set_xlabel("Registros no lote")
+        ax.set_ylabel("Tempo por lote (s, média ± desvio padrão)")
+    decimal_comma(ax)
+    ax.legend(loc="upper left", fontsize=9)
+    save(fig, out_dir, "auditoria-tempo-por-lote-log.png" if log else "auditoria-tempo-por-lote.png",
+         "Tempo médio para auditar um lote, sem chamadas à blockchain, no cenário íntegro e com a "
+         f"localização dos registros adulterados ({repetitions_text([len(raw[n]) for n in ns])}).",
+         stem)
 
 
 def note(what: str, why: str) -> None:
@@ -1041,6 +1246,9 @@ def note(what: str, why: str) -> None:
 
 CHARTS = {
     "monitor-perf": monitor_perf,
+    "monitor-audit-cost": lambda rows, out_dir, stem: (audit_cost_phases(rows, out_dir, stem),
+                                                        audit_cost_totals(rows, out_dir, stem),
+                                                        audit_cost_totals(rows, out_dir, stem, log=True)),
     "monitor-detection": monitor_detection,
     "monitor-sizing": monitor_sizing,
     "perf": anchor_perf,

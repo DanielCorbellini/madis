@@ -53,3 +53,6 @@ apps/anchor-service/test/wip-max-batch-size/cycle.test.ts.bak
 apps/anchor-service/test/wip-max-batch-size/metrics.test.ts.bak
 apps/monitor-service/test/wip-build-merkle-tree/audit-integration.test.ts.bak
 apps/monitor-service/test/wip-build-merkle-tree/audit.test.ts.bak
+
+tools/bench-charts/COMMANDS.md
+tools/bench-charts/__pycache__/plot.cpython-314.pyc

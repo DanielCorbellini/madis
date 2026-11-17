@@ -25,17 +25,18 @@ tools/bench-charts/.venv/bin/python tools/bench-charts/plot.py <results-dir> [--
 
 | Chart | From |
 |---|---|
-| `monitor-custo-tempo.png`, `monitor-custo-cpu.png`, `monitor-custo-memoria.png` | `monitor-perf` |
+| `monitor-custo-tempo.png`, `monitor-custo-tempo-log.png` (the same on log-log axes, so every M stays visible), `monitor-custo-tempo-log-sem-garantia.png` (log-log, full rescan and k = 3 only), `monitor-custo-tempo-log-varredura-completa.png` (log-log, full rescan only), `monitor-custo-tempo-varredura-completa.png` (linear axes, full rescan only), `monitor-custo-cpu.png`, `monitor-custo-memoria.png` | `monitor-perf` |
 | `monitor-deteccao-vs-k.png`, `monitor-estrategias.png` | `monitor-detection` |
 | `monitor-dimensionamento.png` | `monitor-sizing` |
-| `anchor-perf-fases.png`, `anchor-perf-cpu-memoria.png` | `perf` |
+| `anchor-perf-fases.png`, `anchor-perf-fases-sem-leitura.png` (same bars without the read phase, total on top unchanged), `anchor-perf-fases-sem-leitura-valores.png` (the same, with each phase's value inside its bar), `anchor-perf-cpu-memoria.png` | `perf` |
 | `entre-redes-tempos.png` (median + p95 marker), `entre-redes-tempos-mediana.png` (median only) | `cross-chain` (the collection run) |
 | `entre-redes-custo-24h.png` | `cross-chain-cost-24h` |
 | `entre-redes-projecao-anual.png` | `cross-chain-annual` (p10–p90 range in the caption, from its `.meta.json`) |
 | `entre-redes-custo-por-registro.png` | `cross-chain-per-record` |
 | `entre-redes-sintese.csv`, `entre-redes-deploy.csv`, `entre-redes-gas.csv` | `cross-chain-summary`, `cross-chain-deploy`, `cross-chain-gas` |
 | `entre-redes-exploradores-projecao-anual-media.png` (annual budget), `-projecao-anual-mediana.png` (a typical day, annualized), `-projecao-anual-media-horizontal.png` and `-mediana-horizontal.png` (the same data with horizontal bars and larger labels; log mode only), `-custo-24h.png` (with the period's mean and median as reference lines), `-custo-por-registro.png`, `-sintese.csv`, `-deploy.csv` | `cross-chain-scanner-{mean,median}-{annual,cost-24h,per-record,summary,deploy}`, all ten needed |
-| `comparacao-ancoragem-auditoria.png` | `perf` + `monitor-audit-cost` together |
+| `auditoria-fases-sem-leitura-valores.png` (time per record of each audit phase, locating included, values inside the bars), `auditoria-tempo-por-lote.png` (seconds per batch, intact vs with locating, linear axes), `auditoria-tempo-por-lote-log.png` (the same on log-log axes, every batch size visible) | `monitor-audit-cost` |
+| `comparacao-ancoragem-auditoria.png` (total time per batch), `comparacao-ancoragem-auditoria-localizacao-por-registro.png` (time per record, with locating every proof as a third bar) | `perf` + `monitor-audit-cost` together |
 
 ### Cross-chain comparison
 

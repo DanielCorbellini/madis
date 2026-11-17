@@ -75,16 +75,27 @@ export function meanGas(rows: CrossChainRow[], network: string): Gas & { testnet
 
 /**
  * What one transaction with this gas would have cost on one historical day.
- * Arbitrum: (L2 gas + that day's L1 gas) × the day's L2 base fee, since the L1
- * part is charged in L2 gas units. Elsewhere: total gas × the day's price.
+ * Arbitrum, fetched history: (L2 gas + that day's L1 gas) × the day's L2 base
+ * fee, the price the L1 gas was expressed at. Arbitrum, scanner series: L2 gas
+ * × the explorer's price + the day's L1 charge in wei. Elsewhere: total gas ×
+ * the day's price.
  */
 export function dailyCost(
   day: HistoryDay,
   gas: Gas,
   l1Field: "l1GasUsed" | "l1GasUsedDeploy" = "l1GasUsed",
 ): Cost {
-  const units = day.kind === "arbitrum" ? gas.l2 + Number(day[l1Field] ?? 0) : gas.total;
-  const usd = units * Number(day.gasPriceWei) * WEI * day.tokenUsd;
+  const price = Number(day.gasPriceWei);
+  // A scanner series carries Arbitrum's L1 charge already in wei: the explorer's
+  // price applies to the L2 execution only.
+  const l1Fee = day[l1Field === "l1GasUsed" ? "l1FeeWei" : "l1FeeDeployWei"];
+  const wei =
+    day.kind !== "arbitrum"
+      ? gas.total * price
+      : typeof l1Fee === "string"
+        ? gas.l2 * price + Number(l1Fee)
+        : (gas.l2 + Number(day[l1Field] ?? 0)) * price;
+  const usd = wei * WEI * day.tokenUsd;
   return { usd, brl: usd * day.ptax };
 }
 
